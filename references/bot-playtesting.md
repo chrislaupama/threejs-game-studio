@@ -34,8 +34,17 @@ Adapt `INPUT_SCRIPT` to the game's controls and level layout: an endless runner 
 
 ## Headless WebGL Caveats
 
-- Run Playwright suites with `workers: 1` for WebGL games (the scaffold config does). Parallel headless contexts share the software rasterizer; the frame-time collapse makes game time drift from wall time, flaking timed phases and screenshot baselines.
-- Never report headless FPS as performance evidence: headless Chromium renders WebGL on SwiftShader (software), which can run at ~2 fps on scenes a real GPU renders at 120. Capture FPS on a real GPU (headed browser or a `--gpu` probe) and label headless numbers as functional-only.
+- Start Playwright WebGL suites with `workers: 1` (the scaffold does). Multiple
+  concurrent GPU contexts can contend for driver or software-rendering
+  resources and make wall-time tests flaky. Increase workers only after proving
+  isolation on the target CI runner.
+- Never assume headless Chromium uses SwiftShader, and never use an unprobed
+  headless FPS as device-performance evidence. Capture the actual WebGL
+  vendor/renderer/version string when available, label masked results, and use
+  a known real-GPU headed/device run for performance claims.
+- Prefer state predicates, frame counters and bounded polling over exact
+  wall-clock waits. Headless functional timing is useful for softlock detection,
+  not for claiming frame-rate quality.
 
 ## Difficulty Signals
 

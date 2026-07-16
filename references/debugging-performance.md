@@ -25,7 +25,8 @@ Check in this order:
 - Canvas exists in the DOM.
 - Canvas CSS size is nonzero and visible.
 - Drawing buffer size is nonzero and matches expected DPR behavior.
-- WebGL context creation succeeded.
+- The chosen WebGL2 or WebGPU renderer initialized successfully. For WebGPU,
+  eager renderer-dependent work occurs only after `await renderer.init()`.
 - `webglcontextlost` is not firing during restart; no code accidentally calls
   `forceContextLoss()`. If loss is deliberate, `preventDefault()` and the
   restoration/recreation path are owned and tested.
@@ -81,7 +82,10 @@ Check:
 - One simulation system owns body/collider creation and disposal.
 - Physics timestep is stable and not tied directly to variable render delta.
 - Animation mixer updates and clip actions.
-- Multiple requestAnimationFrame loops.
+- Multiple animation loops or a mixture of `requestAnimationFrame` and
+  `renderer.setAnimationLoop()` owners.
+- Deprecated `THREE.Clock`; current r185 code should update one `THREE.Timer`
+  exactly once per frame.
 - State transitions that stop updates or restart timers.
 - Collision proxies vs visual meshes.
 - Collider scale, rotation, and offset match the visual expectation.
@@ -109,6 +113,8 @@ Check:
 - Orientation/resize after rotation.
 - Desktop input still works after mobile controls are added.
 - UI controls emit game intents and do not directly duplicate simulation rules.
+- Held actions track keyboard, pointer, touch and gamepad sources independently;
+  releasing one source does not cancel another still-held source.
 
 ## Performance Profiling Order
 
@@ -116,7 +122,8 @@ Measure in production preview when user-facing performance matters.
 
 1. Establish scenario: viewport, DPR, route, gameplay state, camera view, mobile/desktop.
 2. Baseline:
-   - FPS/frame time.
+   - Frame-time distribution (p50/p90/p95 and worst relevant spike), not only a
+     rounded FPS counter.
    - Renderer calls.
    - Triangles.
    - Geometries.
@@ -138,7 +145,8 @@ Measure in production preview when user-facing performance matters.
    - GPU fragment: overdraw, post-processing, high DPR, transparent particles.
    - GPU vertex: high triangle count, dense shadows.
    - Memory: textures, render targets, undisposed resources.
-   - Network/bundle: large dependencies or assets.
+   - Loading/bundle: large dependencies or local assets, decode/transcode and
+     shader-compilation stalls.
 4. Apply one optimization.
 5. Re-measure the same scenario.
 6. Check visual/playability regression.
@@ -149,7 +157,9 @@ and resource counters return to a stable baseline.
 
 ## Preferred Optimizations
 
-- InstancedMesh for repeated detail.
+- `InstancedMesh` for repeated objects sharing geometry and material.
+- `BatchedMesh` for different geometries sharing one material.
+- `BufferGeometryUtils.mergeGeometries()` for compatible static geometry.
 - Shared geometries/materials/textures.
 - Object pools for effects, bullets, pickups, and debris.
 - Frustum/distance culling.
@@ -179,6 +189,60 @@ window.__THREE_GAME_DIAGNOSTICS__ = {
 ```
 
 Useful fields include `renderer.info.render.calls`, `triangles`, `points`, `lines`, `memory.geometries`, and `memory.textures`.
+
+With multiple WebGL render/post passes, `renderer.info` resets after each
+render call by default. Own the reset at the outer frame boundary:
+
+```ts
+renderer.info.autoReset = false;
+
+function renderCompleteFrame(): void {
+  renderer.info.reset();
+  composer.render();
+  publishRendererCounts(renderer.info);
+}
+```
+
+Probe rather than assume the WebGL implementation, especially in headless CI:
+
+```ts
+function describeWebGL(renderer: THREE.WebGLRenderer): Record<string, string> {
+  const gl = renderer.getContext();
+  const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+  return {
+    version: String(gl.getParameter(gl.VERSION)),
+    vendor: String(
+      gl.getParameter(debugInfo ? debugInfo.UNMASKED_VENDOR_WEBGL : gl.VENDOR),
+    ),
+    renderer: String(
+      gl.getParameter(debugInfo ? debugInfo.UNMASKED_RENDERER_WEBGL : gl.RENDERER),
+    ),
+  };
+}
+```
+
+The extension can be unavailable or privacy-masked. Report the literal result;
+do not infer a real GPU merely because a headed browser was used.
+
+## Shader And Pipeline Triage
+
+- Keep `renderer.debug.checkShaderErrors` enabled during development.
+- Capture the first material/program error before subsequent warnings obscure
+  it. Verify required attributes, defines, uniforms and color output.
+- Identify the renderer path. WebGL accepts GLSL `ShaderMaterial`,
+  `RawShaderMaterial`, `onBeforeCompile` and `EffectComposer`; WebGPU requires
+  node materials/TSL and `RenderPipeline`.
+- Test with post disabled. If the beauty pass is correct, add passes back one at
+  a time and verify size, resolution, output transform and disposal.
+- Prewarm a stable WebGL scene with `renderer.compileAsync(scene, camera)` only
+  after assets/material permutations are ready; it is not a substitute for
+  handling compilation errors.
+- For WebGPU, initialize before eager rendering, KTX2 support detection, or
+  other renderer-dependent setup. Use current synchronous `render()` after
+  initialization.
+
+Official APIs: [WebGLRenderer](https://threejs.org/docs/pages/WebGLRenderer.html)
+and [WebGPURenderer](https://threejs.org/docs/pages/WebGPURenderer.html).
 
 For physics-heavy games, add:
 
@@ -214,4 +278,7 @@ Residual risk:
 - Fixing symptoms in CSS when renderer/camera sizing is wrong.
 - Adding mobile controls without testing pointer cancel and safe areas.
 - Ignoring console/page errors because the canvas appears nonblank.
+- Trusting a headless renderer label or FPS assumption without probing it.
+- Publishing only the last post pass's renderer counts because info auto-reset
+  was left enabled.
 - Shipping an imported model without checking scale, pivot, collision, animation clips, texture memory, or mobile cost.

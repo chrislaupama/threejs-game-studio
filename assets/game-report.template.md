@@ -1,5 +1,9 @@
 # Three.js Game Evidence Report
 
+Copy this file into the game project for broad work. Replace every prompt with
+the observed result or `not applicable — reason`; do not treat a heading or an
+unchecked placeholder as evidence.
+
 ## Phase ledger
 
 - Discovery/design:
@@ -11,7 +15,8 @@
 
 ## Local content plan
 
-Local content sources: [comma-separated allowed source categories]
+Local content sources: [replace with comma-separated values chosen from:
+procedural, project-local, user-supplied, deferred]
 
 - Hero/player:
 - Threats/enemies:
@@ -20,7 +25,22 @@ Local content sources: [comma-separated allowed source categories]
 - Materials/textures:
 - UI/fonts/icons:
 - Audio:
-- Provenance inventory path:
+- Provenance inventory path (the scaffold creates `docs/content-provenance.md`):
+
+## Three.js and runtime contract
+
+- Three.js revision (installed package and `THREE.REVISION`, for example
+  `three@0.185.1 / r185`):
+- Renderer/backend (`WebGLRenderer`/WebGL or `WebGPURenderer`/WebGPU, including
+  any fallback):
+- Documentation/version baseline (official pages/source checked against the
+  installed revision):
+- Lifecycle/disposal (owner of start, loop, reset, listeners, GPU/audio
+  resources, dispose, and re-entry):
+- Resize/DPR (tested viewports/orientation, camera and render-target resize,
+  drawing-buffer result, and capped DPR):
+- Loading/error behavior (local asset loading UI, required-asset failure,
+  actionable message, retry, and deliberate fallback):
 
 ## Game design brief
 
@@ -46,6 +66,9 @@ Local content sources: [comma-separated allowed source categories]
 - Collision model:
 - Timestep:
 - Collider count:
+- Lifecycle/disposal implementation:
+- Resize/DPR implementation:
+- Loading/error behavior implementation:
 - Gesture unlock:
 - Mute:
 - Pause/restart:
@@ -53,12 +76,17 @@ Local content sources: [comma-separated allowed source categories]
 ## Verification
 
 - Build: [pass/fail]
+- Unit/focused tests: [commands and pass/fail]
+- Production preview/base path: [URL, configured base, pass/fail]
 - Local-only audit: [pass/fail]
 - Live outbound-request check:
 - Browser/URL:
 - Real input/objective/fail-retry:
 - Sustained human play (clean load, duration/session):
 - Desktop/mobile:
+- Resize/orientation/DPR evidence:
+- Loading/required-local-asset-error/retry evidence:
+- Lifecycle/disposal/re-entry evidence:
 - Canvas/console/page errors:
 - Renderer/performance diagnostics:
 - Visual test harness:
@@ -67,7 +95,9 @@ Local content sources: [comma-separated allowed source categories]
 - Checks not run: [list or none]
 - Remaining risks: [list or none]
 
-## Premium scorecard (when claimed)
+## Polished, premium, or showcase evidence (when claimed)
+
+- Claim tier: [none/polished/premium/showcase; visual claims must match the audit flag]
 
 - Art direction — after:
 - Hero/player — after:

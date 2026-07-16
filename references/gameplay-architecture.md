@@ -3,6 +3,7 @@
 ## Contents
 
 - First playable and module ownership
+- State transitions, time domains, and lifecycle
 - Local model/animation integration
 - Input, camera, collision, and mechanic iteration
 - Design/feel, audio hooks, diagnostics, and verification
@@ -66,6 +67,91 @@ input -> fixed physics if any -> gameplay systems -> animation/VFX -> camera -> 
 
 Do not invent abstractions before the mechanics need them. Do extract duplicated entity, input, collision, and asset logic once multiple features share it.
 
+## State Transition Contract
+
+Keep one canonical state machine. UI, audio, input modes, and simulation observe
+transitions; they do not independently decide whether the game is won, paused,
+or over.
+
+```ts
+type GameState =
+  | { name: 'loading'; progress: number }
+  | { name: 'menu' }
+  | { name: 'playing'; runId: number }
+  | { name: 'paused'; runId: number }
+  | { name: 'won'; runId: number; score: number }
+  | { name: 'lost'; runId: number; reason: 'time' | 'health' | 'hazard' }
+  | { name: 'error'; message: string };
+
+const allowed: Record<GameState['name'], ReadonlySet<GameState['name']>> = {
+  loading: new Set(['menu', 'error']),
+  menu: new Set(['playing', 'loading']),
+  playing: new Set(['paused', 'won', 'lost', 'menu']),
+  paused: new Set(['playing', 'menu']),
+  won: new Set(['playing', 'menu']),
+  lost: new Set(['playing', 'menu']),
+  error: new Set(['loading', 'menu']),
+};
+
+function canTransition(from: GameState, to: GameState): boolean {
+  return allowed[from.name].has(to.name);
+}
+```
+
+Put transition side effects in one place:
+
+```ts
+function enterState(next: GameState): void {
+  if (!canTransition(state, next)) {
+    throw new Error(`Invalid transition: ${state.name} -> ${next.name}`);
+  }
+  const previous = state;
+  state = next;
+  input.setContext(next.name);
+  audio.onStateChanged(previous.name, next.name);
+  hud.render(next);
+}
+```
+
+Use a discriminated union for compile-time state data. For a tiny game, a
+string enum and explicit transition function is sufficient; do not install a
+state-machine package merely to avoid ten clear lines of code.
+
+## Time Domains
+
+Name time sources so pause, hitstop, slow motion, animation, UI, and physics do
+not accidentally share the wrong clock:
+
+- **real time:** browser frame delta; drives diagnostics and feedback decay
+- **simulation time:** fixed or scaled steps; drives rules and collision
+- **presentation time:** smooth visual animation and camera; may continue when
+  simulation pauses by design
+- **UI time:** CSS/WAAPI or a real-time delta; remains responsive while paused
+
+Use r185 `THREE.Timer` once per rendered frame. Clamp the render delta after tab
+sleep. Accumulate fixed simulation steps when fairness or contact depends on
+timing. Do not call the timer repeatedly from separate systems.
+
+## Lifecycle Contract
+
+Use explicit lifecycle names even when implementation is a single class:
+
+```ts
+interface GameSystem {
+  start?(): void;
+  fixedUpdate?(stepSeconds: number): void;
+  update?(deltaSeconds: number, presentationSeconds: number): void;
+  reset?(runId: number): void;
+  dispose(): void;
+}
+```
+
+Register systems in update order and dispose them in reverse ownership order.
+Reset must clear transient entities, contacts, input edges, timers, tweens,
+animation actions, audio voices, UI overlays, and seeded RNG state that belongs
+to the run. `dispose()` additionally removes listeners/workers and frees GPU or
+audio resources; reset is not a substitute for disposal.
+
 ## Imported Local 3D Assets And Animation
 
 When gameplay uses project-owned or user-supplied GLB/FBX assets:
@@ -89,6 +175,46 @@ When gameplay uses project-owned or user-supplied GLB/FBX assets:
 - Handle pointer release/cancel/blur so controls do not stick.
 - Keep CSS `touch-action` intentional and scoped.
 - Preserve focus and restart controls after fail/pause.
+
+Track sources independently, then compose the action. Releasing one key or
+pointer must not cancel the same action still held by another source.
+
+```ts
+type Action = 'move-left' | 'move-right' | 'jump' | 'dash' | 'pause';
+
+class ActionMap {
+  private readonly sources = new Map<Action, Set<string>>();
+  private readonly pressed = new Set<Action>();
+
+  set(action: Action, source: string, down: boolean): void {
+    const active = this.sources.get(action) ?? new Set<string>();
+    this.sources.set(action, active);
+    const wasDown = active.size > 0;
+    if (down) active.add(source);
+    else active.delete(source);
+    if (!wasDown && active.size > 0) this.pressed.add(action);
+  }
+
+  held(action: Action): boolean {
+    return (this.sources.get(action)?.size ?? 0) > 0;
+  }
+
+  consumePressed(action: Action): boolean {
+    const value = this.pressed.has(action);
+    this.pressed.delete(action);
+    return value;
+  }
+
+  clear(): void {
+    this.sources.clear();
+    this.pressed.clear();
+  }
+}
+```
+
+Use stable source IDs such as `keyboard:Space`, `pointer:17`,
+`gamepad:0:button:1`. Clear sources on blur, visibility loss, pointer cancel,
+controller disconnect, pause, and teardown.
 
 ## Camera And Controls
 

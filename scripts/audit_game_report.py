@@ -18,8 +18,19 @@ BASE_REQUIRED = [
     "debug/performance",
     "qa/release",
     "controls",
+    "unit/focused tests",
+    "production preview/base path",
     "checks not run",
     "remaining risks",
+]
+
+TECHNICAL_REQUIRED = [
+    "three.js revision",
+    "renderer/backend",
+    "documentation/version baseline",
+    "lifecycle/disposal",
+    "resize/dpr",
+    "loading/error behavior",
 ]
 
 DESIGN_REQUIRED = [
@@ -51,6 +62,12 @@ PREMIUM_REQUIRED = [
     "visual test harness",
 ]
 
+POLISHED_REQUIRED = [
+    "measured evidence",
+    "fresh-eyes review",
+    "automatic failures remaining",
+]
+
 PHYSICS_REQUIRED = ["collision model", "timestep", "collider"]
 AUDIO_REQUIRED = ["audio", "gesture unlock", "mute", "pause/restart"]
 DIFFICULTY_REQUIRED = ["two-reaction-delay bot comparison"]
@@ -64,12 +81,24 @@ PASS_PATTERNS = {
         r"(?m)^\s*(?:[-*]\s*)?local-only audit\s*[:=-]\s*"
         r"(?:pass|passed|clean|0 findings|0 failures)\b"
     ),
+    "unit/focused tests must explicitly pass": re.compile(
+        r"(?m)^\s*(?:[-*]\s*)?unit/focused tests\s*[:=-]\s*"
+        r"(?:pass|passed|clean)\b"
+    ),
+    "production preview/base path must explicitly pass": re.compile(
+        r"(?m)^\s*(?:[-*]\s*)?production preview/base path\s*[:=-]\s*"
+        r"(?:pass|passed|clean)\b"
+    ),
 }
 
 CONTENT_SOURCE_PATTERN = re.compile(
     r"(?m)^\s*(?:[-*]\s*)?local content sources\s*[:=-]\s*([^\n]+)$"
 )
 ALLOWED_CONTENT_SOURCES = {"procedural", "project-local", "user-supplied", "deferred"}
+CLAIM_TIER_PATTERN = re.compile(
+    r"(?m)^\s*(?:[-*]\s*)?claim tier\s*[:=-]\s*([^\n]+)$"
+)
+ALLOWED_CLAIM_TIERS = {"none", "polished", "premium", "showcase"}
 
 
 def normalize(text: str) -> str:
@@ -89,6 +118,23 @@ def normalize(text: str) -> str:
         "debug and performance": "debug/performance",
         "qa and release": "qa/release",
         "physics engine": "collision model",
+        "threejs revision": "three.js revision",
+        "three revision": "three.js revision",
+        "renderer / backend": "renderer/backend",
+        "renderer and backend": "renderer/backend",
+        "render backend": "renderer/backend",
+        "documentation / version baseline": "documentation/version baseline",
+        "documentation and version baseline": "documentation/version baseline",
+        "docs/version baseline": "documentation/version baseline",
+        "version/documentation baseline": "documentation/version baseline",
+        "lifecycle / disposal": "lifecycle/disposal",
+        "lifecycle and disposal": "lifecycle/disposal",
+        "resize / dpr": "resize/dpr",
+        "resize and dpr": "resize/dpr",
+        "resize/device pixel ratio": "resize/dpr",
+        "loading / error behavior": "loading/error behavior",
+        "loading and error behavior": "loading/error behavior",
+        "loading/error handling": "loading/error behavior",
     }
     text = text.lower()
     for before, after in replacements.items():
@@ -118,7 +164,22 @@ def main() -> int:
         description="Check a Three.js game report for design, implementation, and QA evidence."
     )
     parser.add_argument("report", help="Markdown/text report path.")
-    parser.add_argument("--premium", action="store_true", help="Enforce scorecard gates.")
+    claim_tier = parser.add_mutually_exclusive_group()
+    claim_tier.add_argument(
+        "--polished",
+        action="store_true",
+        help="Enforce polished evidence, fresh-eyes, and automatic-failure gates.",
+    )
+    claim_tier.add_argument(
+        "--premium",
+        action="store_true",
+        help="Enforce premium scorecard gates.",
+    )
+    claim_tier.add_argument(
+        "--showcase",
+        action="store_true",
+        help="Enforce the stricter showcase scorecard gates.",
+    )
     parser.add_argument("--physics", action="store_true", help="Require physics evidence.")
     parser.add_argument("--audio", action="store_true", help="Require audio evidence.")
     parser.add_argument(
@@ -139,7 +200,7 @@ def main() -> int:
         return 2
 
     text = normalize(path.read_text(encoding="utf-8"))
-    missing = missing_markers(text, BASE_REQUIRED)
+    missing = missing_markers(text, [*BASE_REQUIRED, *TECHNICAL_REQUIRED])
     if not args.no_design:
         missing.extend(missing_markers(text, DESIGN_REQUIRED))
     if args.physics:
@@ -169,7 +230,32 @@ def main() -> int:
             )
 
     score_failures: list[str] = []
-    if args.premium:
+    visual_claim = args.polished or args.premium or args.showcase
+    scored_claim = args.premium or args.showcase
+    expected_tier = (
+        "polished" if args.polished else
+        "premium" if args.premium else
+        "showcase" if args.showcase else
+        None
+    )
+    tier_match = CLAIM_TIER_PATTERN.search(text)
+    reported_tier = tier_match.group(1).strip() if tier_match else None
+    if reported_tier is not None and reported_tier not in ALLOWED_CLAIM_TIERS:
+        semantic_failures.append(
+            f"invalid claim tier: {reported_tier}; expected none, polished, premium, or showcase"
+        )
+    elif expected_tier is not None and reported_tier != expected_tier:
+        semantic_failures.append(
+            f"claim tier must explicitly match --{expected_tier}: "
+            f"found {reported_tier or 'missing'}"
+        )
+    elif expected_tier is None and reported_tier in {"polished", "premium", "showcase"}:
+        semantic_failures.append(
+            f"claim tier {reported_tier} requires the matching --{reported_tier} flag"
+        )
+    if visual_claim:
+        missing.extend(missing_markers(text, POLISHED_REQUIRED))
+    if scored_claim:
         missing.extend(missing_markers(text, PREMIUM_REQUIRED))
         scores: list[float] = []
         for category in PREMIUM_CATEGORIES:
@@ -186,8 +272,20 @@ def main() -> int:
             average = sum(scores) / len(scores)
             if average < 2.3:
                 score_failures.append(f"scorecard average below 2.3: {average:.2f}")
-        if not re.search(r"automatic failures remaining\s*[:=-]\s*(?:none|0)\b", text):
-            score_failures.append("automatic failures remaining must be none or 0")
+            if args.showcase:
+                top_scores = sum(score == 3 for score in scores)
+                if top_scores < 6:
+                    score_failures.append(
+                        f"showcase requires at least six category scores of 3: found {top_scores}"
+                    )
+                if average < 2.7:
+                    score_failures.append(
+                        f"showcase scorecard average below 2.7: {average:.2f}"
+                    )
+    if visual_claim and not re.search(
+        r"automatic failures remaining\s*[:=-]\s*(?:none|0)\b", text
+    ):
+        score_failures.append("automatic failures remaining must be none or 0")
 
     failures = [*dict.fromkeys([*missing, *semantic_failures, *score_failures])]
     if failures:

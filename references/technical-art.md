@@ -4,7 +4,7 @@
 
 - Technical-art brief and render budgets
 - Material/shader and VFX systems
-- Instancing, LOD, culling, and local-import cleanup
+- Instancing, batching, LOD, culling, adaptive quality, and cleanup
 - Surface detail, readability, and reporting
 
 Use this reference before polished/showcase graphics work,
@@ -14,9 +14,13 @@ performance.
 
 Technical art bridges art direction and real-time constraints. The goal is
 readable authored detail that survives active interaction, mobile viewports,
-and WebGL budgets.
+and the chosen WebGL or WebGPU budget.
 
-Research basis: Three.js exposes renderer diagnostics through `WebGLRenderer.info`; `InstancedMesh` is designed for many objects sharing geometry/materials; `LOD` switches objects by distance; `KTX2Loader` supports Basis Universal GPU texture workflows; MDN WebGL best practices emphasize eliminating errors, understanding system limits, eager deletion, batching draw calls, per-pixel VRAM budgets, smaller back buffers, mipmaps, compressed textures, and high-DPI discipline.
+Primary Three.js references: [WebGLRenderer.info](https://threejs.org/docs/pages/WebGLRenderer.html),
+[InstancedMesh](https://threejs.org/docs/pages/InstancedMesh.html),
+[BatchedMesh](https://threejs.org/docs/pages/BatchedMesh.html),
+[LOD](https://threejs.org/docs/pages/LOD.html), and
+[KTX2Loader](https://threejs.org/docs/pages/KTX2Loader.html).
 
 ## Technical Art Brief (Broad Visual Work)
 
@@ -66,6 +70,30 @@ How to spend within them:
   chain settings are in `shaders.md`.
 
 Always report actual renderer diagnostics after the graphics pass: calls, triangles, geometries, textures, material count if available, post passes, shadow settings, DPR cap, and bottlenecks.
+
+For a multi-pass WebGL frame, prevent `renderer.info` from resetting at every
+pass and take the snapshot after the full frame:
+
+```ts
+renderer.info.autoReset = false;
+
+function renderFrame(): void {
+  renderer.info.reset();
+  composer.render(); // or render every explicit pass here
+  publishRendererInfo(renderer.info); // totals for this complete frame
+}
+```
+
+If a framework or post stack owns rendering, place the reset and snapshot at
+its outer frame boundary. Do not compare a single beauty-pass count against a
+full multi-pass budget.
+
+Estimate texture memory rather than treating `info.memory.textures` as bytes.
+For an uncompressed 2D RGBA8 texture, use roughly
+`width * height * 4 * 4/3` bytes with a complete mip chain. Cube maps multiply
+by six; array/3D textures multiply by layers/depth; half-float RGBA is roughly
+eight bytes per texel; block-compressed GPU formats need format-specific math.
+Browser and driver allocations still vary, so label the number an estimate.
 
 ## Material And Shader System
 
@@ -136,7 +164,21 @@ Use event-driven VFX over permanent particle clutter:
 
 Pool effects and reuse geometries/materials. Permanent particle fields must stay cheap and sparse.
 
-## Instancing, LOD, And Culling
+## Choose Separate, Merge, Instance, Or Batch
+
+| Structure | Choose when | Main tradeoff |
+| --- | --- | --- |
+| Separate `Mesh` objects | Few objects, unique materials/behavior | Most flexible, most draw calls |
+| Merged `BufferGeometry` | Static geometry, one material, no per-object identity | Cheap submission, hard to update/cull individually |
+| `InstancedMesh` | Same geometry and material, many transforms/colors | One draw call family; per-instance data only |
+| `BatchedMesh` | Different geometries sharing a material | Multi-draw batch with capacity planning |
+| `LOD` | One object needs distance variants | More asset variants and transition tuning |
+
+Use `BufferGeometryUtils.mergeGeometries()` for compatible static geometry.
+Do not claim shared materials alone batch draw calls. Sharing reduces state and
+program churn; merging, instancing, or batching reduces submissions.
+
+## Instancing, Batching, LOD, And Culling
 
 Use instancing for many copies with the same geometry/material and different transforms: windows, bolts, lane markers, city lights, debris, foliage-like props, stars, crowd cards, track panels, repeated pickups, background modules.
 
@@ -146,6 +188,50 @@ Rules:
 - Compute or update bounds for instanced groups when transforms change materially.
 - Do not instance everything blindly. Different materials or constantly changing transforms can erase the win.
 - Keep collision separate from instanced visual detail.
+
+Minimal instancing update:
+
+```ts
+const instances = new THREE.InstancedMesh(geometry, material, count);
+const transform = new THREE.Object3D();
+
+for (let index = 0; index < count; index += 1) {
+  transform.position.copy(positions[index]);
+  transform.quaternion.copy(rotations[index]);
+  transform.scale.setScalar(scales[index]);
+  transform.updateMatrix();
+  instances.setMatrixAt(index, transform.matrix);
+}
+
+instances.instanceMatrix.needsUpdate = true;
+instances.computeBoundingSphere();
+scene.add(instances);
+```
+
+Use `BatchedMesh` when one shared material covers a kit of different geometry:
+
+```ts
+const batch = new THREE.BatchedMesh(
+  500,   // maximum instances
+  80_000, // total reserved vertices
+  160_000, // total reserved indices
+  worldMaterial,
+);
+
+const crateGeometryId = batch.addGeometry(crateGeometry);
+const barrierGeometryId = batch.addGeometry(barrierGeometry);
+const crateId = batch.addInstance(crateGeometryId);
+const barrierId = batch.addInstance(barrierGeometryId);
+batch.setMatrixAt(crateId, crateMatrix);
+batch.setMatrixAt(barrierId, barrierMatrix);
+batch.computeBoundingSphere();
+scene.add(batch);
+```
+
+Plan capacity from content counts and geometry sizes. Use per-instance
+visibility for pooled objects and call `optimize()` only at an intentional
+maintenance/loading boundary, not during active play. `batch.dispose()` frees
+its GPU buffers; keep ownership of source geometries/materials explicit.
 
 Use LOD when:
 
@@ -158,6 +244,60 @@ Rules:
 - Add hysteresis or distance gaps to reduce visible popping.
 - Use impostor cards or simplified silhouettes for far layers when appropriate.
 - Verify LOD transitions during real camera motion, not only a static inspection.
+
+Prefer hysteresis to rapid boundary flicker:
+
+```ts
+const lod = new THREE.LOD();
+lod.addLevel(nearMesh, 0, 0.1);
+lod.addLevel(midMesh, 35, 0.1);
+lod.addLevel(farMesh, 90, 0.15);
+```
+
+Cull by meaningful groups. One huge merged world defeats fine-grained frustum
+culling; thousands of tiny independent meshes defeat submission budgets. Chunk
+the world around camera range, visibility cells, level rooms, track segments,
+or authored encounter spaces.
+
+## Adaptive Quality Without Device Guessing
+
+Choose a starting tier from conservative project defaults, then adapt from
+measured frame time with hysteresis. Do not sniff a device name and call it a
+performance tier.
+
+```ts
+class FrameBudgetController {
+  private samples: number[] = [];
+  private slowWindows = 0;
+  private fastWindows = 0;
+
+  push(frameSeconds: number): 'lower' | 'raise' | null {
+    this.samples.push(Math.min(frameSeconds, 0.25));
+    if (this.samples.length < 120) return null;
+
+    const sorted = [...this.samples].sort((a, b) => a - b);
+    const p90 = sorted[Math.floor(sorted.length * 0.9)];
+    this.samples = [];
+
+    this.slowWindows = p90 > 1 / 45 ? this.slowWindows + 1 : 0;
+    this.fastWindows = p90 < 1 / 70 ? this.fastWindows + 1 : 0;
+    if (this.slowWindows >= 2) {
+      this.slowWindows = 0;
+      return 'lower';
+    }
+    if (this.fastWindows >= 4) {
+      this.fastWindows = 0;
+      return 'raise';
+    }
+    return null;
+  }
+}
+```
+
+Apply one tier step at a time at a safe frame boundary. Lower DPR, shadow map
+size/update rate, post resolution/pass count, far effects, particles and LOD
+distance before removing gameplay cues. Never change physics timestep,
+difficulty or authoritative visibility with a visual-quality tier.
 
 ## Imported Local Asset Cleanup
 
@@ -205,3 +345,5 @@ Report:
 - VFX readability checks.
 - Mobile/DPR/post/shadow tradeoffs.
 - Remaining visual performance risks.
+- Renderer/backend and actual GPU/driver string when it can be probed; never
+  assume headless means a specific renderer.

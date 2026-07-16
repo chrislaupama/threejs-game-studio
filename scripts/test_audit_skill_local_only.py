@@ -45,22 +45,40 @@ class AuditSkillLocalOnlyTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("non-local URL", result.stdout)
 
-    def test_accepts_documented_repository_install_url_only_in_readme(self) -> None:
+    def test_accepts_official_threejs_research_urls_in_markdown(self) -> None:
         result = self.run_audit(
             {
-                "README.md": (
-                    "npx skills add "
-                    "https://github.com/chrislaupama/threejs-game-studio"
-                ),
                 "SKILL.md": "Local only.",
+                "references/rendering.md": (
+                    "Read https://threejs.org/docs/pages/WebGLRenderer.html and "
+                    "https://github.com/mrdoob/three.js/blob/dev/src/renderers/WebGLRenderer.js."
+                ),
             }
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_rejects_arbitrary_or_nonofficial_markdown_urls(self) -> None:
         result = self.run_audit(
             {
-                "README.md": "Install from https://example.com/other-skill",
                 "SKILL.md": "Local only.",
+                "references/research.md": (
+                    "Reject https://example.com/guide and "
+                    "https://github.com/someone/three.js and "
+                    "https://threejs.org.example.com/phishing."
+                ),
+            }
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("non-local URL", result.stdout)
+        self.assertEqual(result.stdout.count("non-local URL"), 3)
+
+    def test_rejects_official_research_url_outside_markdown(self) -> None:
+        result = self.run_audit(
+            {
+                "SKILL.md": "Local only.",
+                "assets/game/main.ts": (
+                    "const runtimeUrl = 'https://threejs.org/examples/models/hero.glb';"
+                ),
             }
         )
         self.assertEqual(result.returncode, 1)

@@ -12,6 +12,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 TEXT_SUFFIXES = {
@@ -29,8 +30,10 @@ EXEMPT_PATHS = {
     Path("NOTICE.md"),
     Path("scripts/audit_local_only.py"),
     Path("scripts/audit_skill_local_only.py"),
+    Path("scripts/audit_skill_structure.py"),
     Path("scripts/test_audit_local_only.py"),
     Path("scripts/test_audit_skill_local_only.py"),
+    Path("scripts/test_audit_skill_structure.py"),
     Path("assets/threejs-vite-game/scripts/audit_local_only.py"),
 }
 
@@ -71,16 +74,38 @@ ALLOWED_NAMESPACE_URLS = {
     "http://www.w3.org/2000/svg",
     "http://www.w3.org/2000/xmlns/",
 }
-ALLOWED_DOCUMENTATION_URLS = {
-    Path("README.md"): {
-        "https://github.com/chrislaupama/threejs-game-studio",
-    },
-}
-
 NETWORK_CLIENT = re.compile(
     r"(?im)^\s*(?:(?:from|import)\s+(?:requests|httpx|aiohttp|urllib\.request)\b|"
     r"(?:curl|wget)\s+)"
 )
+
+
+def is_allowed_research_url(path: Path, value: str) -> bool:
+    """Allow only official Three.js research links, and only in Markdown."""
+    if path.suffix.lower() != ".md":
+        return False
+
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return False
+
+    if parsed.scheme.lower() not in {"http", "https"}:
+        return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    if port not in {None, 80, 443}:
+        return False
+
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if host == "threejs.org" or host.endswith(".threejs.org"):
+        return True
+
+    if host != "github.com":
+        return False
+    path_parts = [part.lower() for part in parsed.path.split("/") if part]
+    return path_parts[:2] == ["mrdoob", "three.js"]
 
 
 @dataclass(frozen=True)
@@ -139,8 +164,8 @@ def audit_file(path: Path, root: Path) -> list[Finding]:
         value = match.group(0).rstrip(".,;")
         if (
             value in ALLOWED_NAMESPACE_URLS
-            or value in ALLOWED_DOCUMENTATION_URLS.get(relative, set())
             or ALLOWED_URL.match(value)
+            or is_allowed_research_url(relative, value)
         ):
             continue
         findings.append(
@@ -179,8 +204,8 @@ def main() -> int:
 
     print(
         "Skill local-only audit passed: no bundled provider helpers, credentials, "
-        "MCP invocations, network clients, or non-local URLs found outside "
-        "legal/fixture files and the documented repository install URL."
+        "MCP invocations, network clients, or unapproved remote URLs found outside "
+        "legal/fixture files and official Three.js research links in Markdown."
     )
     return 0
 

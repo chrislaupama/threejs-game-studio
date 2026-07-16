@@ -91,9 +91,14 @@ function frame(deltaSeconds: number) {
     accumulator -= FIXED_DT
     steps += 1
   }
-  if (steps === MAX_STEPS) accumulator = 0
+  if (steps === MAX_STEPS && accumulator >= FIXED_DT) accumulator = 0
 }
 ```
+
+This is the package's interactive overload policy: if a full step still remains
+after five catch-up steps, clear the remaining accumulator—including its
+fractional remainder—so a slow frame cannot create a spiral. Deterministic
+offline replay must process all steps without this real-time deadline.
 
 Variable-delta movement is acceptable for slow, non-physical UI-like motion,
 but collision tests must use the same committed transforms as gameplay.
@@ -154,8 +159,11 @@ function segmentSphereTime(
   const a = segment.lengthSq()
   const b = 2 * toCenter.dot(segment)
   const c = toCenter.lengthSq() - radius * radius
+  // A sweep that starts inside the target is already in contact.
+  if (c <= 0) return 0
+  if (a === 0) return null
   const discriminant = b * b - 4 * a * c
-  if (a === 0 || discriminant < 0) return c <= 0 ? 0 : null
+  if (discriminant < 0) return null
   const root = Math.sqrt(discriminant)
   const t0 = (-b - root) / (2 * a)
   const t1 = (-b + root) / (2 * a)

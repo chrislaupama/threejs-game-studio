@@ -73,6 +73,9 @@ test('renders a nonblank interactive game canvas', async ({ page }, testInfo) =>
   await expect(page.locator('#game-canvas')).toBeVisible();
   await page.waitForFunction(() => (window.__THREE_GAME_DIAGNOSTICS__?.frame ?? 0) > 10);
 
+  const runtime = await page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__?.renderer);
+  expect(runtime).toMatchObject({ revision: '185', backend: 'webgl' });
+
   const sample = await sampleCanvas(page);
   expect(sample, JSON.stringify(sample)).toMatchObject({ ok: true });
 
@@ -156,5 +159,31 @@ test('pause and fail states recover through visible controls', async ({ page }, 
   await page.locator('#retry-button').click();
   await expect.poll(() => page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__?.state)).toBe('playing');
   await expect.poll(() => page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__?.score)).toBe(0);
+  expect(outboundRequests).toEqual([]);
+});
+
+test('resize keeps the drawing buffer and camera projection in sync', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop-chrome', 'One desktop resize pass is sufficient.');
+  const outboundRequests = await blockOutboundRequests(page);
+  await page.setViewportSize({ width: 960, height: 540 });
+  await page.goto('/');
+  await page.waitForFunction(() => (window.__THREE_GAME_DIAGNOSTICS__?.frame ?? 0) > 5);
+
+  await page.setViewportSize({ width: 640, height: 800 });
+  await expect
+    .poll(() => page.evaluate(() => {
+      const diagnostics = window.__THREE_GAME_DIAGNOSTICS__;
+      if (!diagnostics) return false;
+      const { canvas, camera } = diagnostics;
+      const expectedWidth = Math.floor(canvas.clientWidth * canvas.dpr);
+      const expectedHeight = Math.floor(canvas.clientHeight * canvas.dpr);
+      const expectedAspect = canvas.clientWidth / canvas.clientHeight;
+      return (
+        canvas.width === expectedWidth &&
+        canvas.height === expectedHeight &&
+        Math.abs(camera.aspect - expectedAspect) < 0.001
+      );
+    }))
+    .toBe(true);
   expect(outboundRequests).toEqual([]);
 });

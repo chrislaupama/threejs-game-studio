@@ -16,13 +16,13 @@
     "audit:local": "python3 scripts/audit_local_only.py ."
   },
   "dependencies": {
-    "three": "^0.184.0"
+    "three": "0.185.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
     "@types/node": "^25.9.0",
     "@types/pngjs": "^6.0.5",
-    "@types/three": "^0.184.1",
+    "@types/three": "0.185.1",
     "pngjs": "^7.0.0",
     "typescript": "^6.0.3",
     "vite": "^8.1.5"

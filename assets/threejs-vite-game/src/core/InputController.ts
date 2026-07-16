@@ -20,7 +20,7 @@ export class InputController {
     radius: 1,
   };
 
-  private dashDown = false;
+  private dashPointerDown = false;
   private pausePressed = false;
   private restartPressed = false;
 
@@ -29,9 +29,6 @@ export class InputController {
       event.preventDefault();
     }
     this.keys.add(event.code);
-    if (event.code === 'Space' || event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
-      this.dashDown = true;
-    }
     if (!event.repeat && (event.code === 'Escape' || event.code === 'KeyP')) {
       this.pausePressed = true;
     }
@@ -42,9 +39,6 @@ export class InputController {
 
   private readonly onKeyUp = (event: KeyboardEvent) => {
     this.keys.delete(event.code);
-    if (event.code === 'Space' || event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
-      this.dashDown = false;
-    }
   };
 
   private readonly onStickDown = (event: PointerEvent) => {
@@ -84,12 +78,12 @@ export class InputController {
 
   private readonly onDashDown = (event: PointerEvent) => {
     event.preventDefault();
-    this.dashDown = true;
+    this.dashPointerDown = true;
   };
 
   private readonly onDashUp = (event: PointerEvent) => {
     event.preventDefault();
-    this.dashDown = false;
+    this.dashPointerDown = false;
   };
 
   private readonly onPauseClick = () => {
@@ -145,7 +139,12 @@ export class InputController {
   }
 
   isDashHeld(): boolean {
-    return this.dashDown;
+    return (
+      this.dashPointerDown ||
+      this.keys.has('Space') ||
+      this.keys.has('ShiftLeft') ||
+      this.keys.has('ShiftRight')
+    );
   }
 
   consumePausePressed(): boolean {
@@ -193,7 +192,7 @@ export class InputController {
 
   private clearHeldInput(): void {
     this.keys.clear();
-    this.dashDown = false;
+    this.dashPointerDown = false;
     this.resetPointer();
   }
 

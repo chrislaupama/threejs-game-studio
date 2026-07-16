@@ -14,6 +14,9 @@ Use this before calling a Three.js browser game complete, premium, release-ready
 Minimum meaningful QA:
 
 - Dependencies installed or known.
+- Installed `three` package version, `THREE.REVISION`, renderer class, and actual
+  backend captured; live-doc examples are not assumed compatible without the
+  version gate in `official-docs.md`.
 - Build/typecheck passes.
 - Dev or preview server opened at the correct URL.
 - Console/page/network errors captured.
@@ -23,6 +26,11 @@ Minimum meaningful QA:
 - Main input path changes game state.
 - Objective/progress path works.
 - Fail/retry or pause/resume path works when relevant.
+- Resize/orientation updates renderer, camera, post targets, picking, and HUD;
+  drawing-buffer dimensions reflect the declared capped DPR policy.
+- Teardown/remount stops the animation loop and removes listeners, controls,
+  workers, mixers, audio, render targets, and owned GPU resources without
+  duplicate updates or monotonic resource growth.
 - A clean-load human play pass covers roughly two minutes or the full short
   session for broad/complete/release work.
 - Recent or risky code paths triggered.
@@ -117,6 +125,11 @@ collision, allocation, pooling, or any CPU/GPU hot path changed:
   handler or frame time plus soak duration/cycles.
 - Report any unmeasured risk honestly.
 
+For renderer evidence, distinguish CPU frame time, GPU frame time, and display
+refresh rate. FPS alone cannot identify a CPU or GPU bottleneck. Sample the same
+camera, seed, active entity count, quality tier, DPR, shadows, and post stack
+before comparing two runs.
+
 ## Release Checks
 
 Before release-ready:
@@ -132,6 +145,9 @@ Before release-ready:
   disabled for the check, and remote WebSocket attempts are reported.
 - Public assets load under static hosting assumptions.
 - Browser support assumptions documented.
+- Renderer/backend compatibility is explicit: WebGL-only GLSL/composer features
+  have a WebGPU fallback or are declared unsupported, and WebGPU/TSL features
+  are not silently claimed on the WebGL production path.
 - Deployment command or static artifact location reported.
 - Residual risks listed.
 
@@ -141,6 +157,10 @@ Before release-ready:
 QA result: pass/fail
 Commands:
 URL:
+Three.js revision and renderer/backend:
+Build/typecheck:
+Unit/focused tests:
+Production preview/base path:
 Controls tested:
 Screenshots/artifacts:
 Console/page/network errors:

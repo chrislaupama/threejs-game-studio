@@ -1,206 +1,361 @@
-# Complete Game Workflow
+# Complete Game Production Workflow
 
-Use this reference at planning time for broad game creation, major upgrades,
-polish, premium/showcase work, or release preparation.
+Use this reference at planning time for a new game, a major upgrade, a broad
+polish pass, a premium/showcase claim, or release preparation. For a focused
+fix, use the owning technical reference and proportionate QA instead.
 
 ## Contents
 
-- Scope modes
-- Evidence ledgers
-- Seven production phases
-- Completion gates
+- Scope and completion modes
+- Coordinator records
+- Novice milestone ladder
+- Nine production phases
+- Change loop and completion gate
 
-## Scope Modes
+## Scope And Completion Modes
 
-Use **thorough mode** for a new game, major gameplay change, polished/premium
-request, broad visual upgrade, or release. Run every applicable phase and make
-the evidence explicit.
+Name the intended deliverable before implementation:
 
-Use **focused mode** for a narrow mechanic, defect, UI state, performance issue,
-or asset import. Read the owning reference, implement the change, and run the
-smallest QA set that proves it. Do not create ceremony for out-of-scope phases.
+| Mode | Deliverable | Minimum proof |
+| --- | --- | --- |
+| Learning checkpoint | One runnable concept with explanation | build + expected visual/behavior + next edit |
+| Mechanic slice | One mechanic in the existing game | focused test + real input + regression check |
+| Vertical slice | One representative, polished loop | start-to-end loop + art/feel/UI sample + budget |
+| Complete short game | Every promised state and ending | full session + retry/next-run + content count |
+| Premium/showcase | Complete game with high visual/feel bar | scorecard + dense-state metrics + fresh-eyes review |
+| Release candidate | Production build ready for handoff | preview matrix + owned residual risks |
 
-## Evidence Ledgers
+Do not silently replace a complete game with a vertical slice. If scope is too
+large, reduce the number of mechanics, levels, enemies, or art families while
+preserving a real beginning, escalation, ending, and replay/retry flow.
 
-Keep these lightweight records during broad work:
+## Coordinator Records
+
+Keep the records lightweight but explicit. Update them as evidence changes.
+
+### Fact and decision ledger
 
 ```text
-Phase ledger:
-- Discovery/design: pending/running/done - evidence:
-- Playable loop: pending/running/done - evidence:
-- Local content/visuals: pending/running/done - evidence:
-- UI/audio/accessibility: pending/running/done - evidence:
-- Debug/performance: pending/running/done - evidence:
-- QA/release: pending/running/done - evidence:
-
-Local content plan:
-- Local content sources: procedural, project-local, user-supplied, and/or deferred
-- Hero/player:
-- Threats/enemies:
-- Rewards/interactables:
-- World/sky/background:
-- Materials/textures/decals:
-- UI/icons/fonts:
-- Audio/SFX/ambience:
-- Source per surface: procedural / project-local / user-supplied / deferred
-
-Evidence ledger:
-- Build/typecheck:
-- Focused tests:
-- Browser and URL:
-- Real input/objective/fail-retry:
-- Desktop/mobile captures:
-- Canvas/console/page errors:
-- Renderer/physics diagnostics:
-- Visual harness and bot playtest decisions:
-- Local-only audit:
-- Live outbound-request check:
+Three.js installed revision:
+Documentation baseline checked:
+Renderer: WebGLRenderer / WebGPURenderer
+Post stack: direct / EffectComposer / RenderPipeline
+Target browsers/devices:
+World units and axes:
+Camera contract:
+Timing model: render delta / fixed simulation / interpolation
+Input actions and devices:
+Collision/physics model:
+Asset formats and ownership:
+Color-space and environment policy:
+Quality tiers and render budgets:
+Persistence/network scope:
+Release target/base path:
 ```
 
-Mark a phase done only after implementation and proportionate verification.
+### Phase ledger
 
-## Phase 1: Discovery And Design Contract
+```text
+0 Discovery/version: pending | running | done | blocked — evidence:
+1 Design/completion: pending | running | done | blocked — evidence:
+2 Architecture/foundation: pending | running | done | blocked — evidence:
+3 First playable: pending | running | done | blocked — evidence:
+4 Content/world: pending | running | done | blocked — evidence:
+5 Visual systems: pending | running | done | blocked — evidence:
+6 Feel/UI/audio/accessibility: pending | running | done | blocked — evidence:
+7 Performance/reliability: pending | running | done | blocked — evidence:
+8 QA/release: pending | running | done | blocked — evidence:
+```
 
-Inspect scripts, dependencies, architecture, renderer, loop ownership, input,
-camera, entities, UI, assets, tests, screenshots, target devices, and release
-constraints. Preserve the existing stack unless change is necessary.
+### Content ledger
 
+```text
+Local content sources: procedural, project-local, user-supplied, and/or deferred
+Hero/player:
+Threats/enemies:
+Rewards/interactables:
+World kit and landmarks:
+Sky/background/atmosphere:
+Materials/textures/decals:
+Animation:
+UI/icons/fonts:
+Music/SFX/ambience:
+Provenance inventory:
+```
+
+For each imported item, record runtime path, source/license, file size, scale,
+axes, pivot, bounds, clips, texture count/resolution, compression, collision
+proxy, sharing, and teardown owner.
+
+### Evidence ledger
+
+```text
+Build/typecheck:
+Unit/focused tests:
+Browser and URL:
+Console/page/asset errors:
+Canvas pixels and active screenshots:
+Controls and input devices:
+Objective, pressure, reward, failure, retry, ending:
+Resize/orientation/mobile/safe-area:
+Audio unlock/mute/pause/restart:
+Renderer/physics/performance diagnostics:
+Memory/disposal/re-entry:
+Visual harness decision:
+Bot playtest decision:
+Production preview/base path:
+Local-only static and live-request audits:
+Checks not run and remaining risks:
+```
+
+Mark a phase done only after implementation and its exit evidence. A plan,
+mockup, or code diff is not exit evidence by itself.
+
+## Novice Milestone Ladder
+
+For a learner, keep the project runnable at each milestone and explain what to
+look for:
+
+1. **Boot:** install, start Vite, show a correctly resized canvas.
+2. **See:** scene, camera, mesh, light, and intentional color output.
+3. **Move:** map keyboard/pointer/touch into one player action.
+4. **Decide:** add a state machine and a visible objective.
+5. **Collide:** separate render mesh from a simple gameplay collider.
+6. **Play:** add pressure, reward, failure, and retry.
+7. **Read:** add HUD, feedback, sound, loading/error, and pause.
+8. **Author:** replace placeholders with a coherent hero/threat/world kit.
+9. **Scale:** measure and optimize the worst active state.
+10. **Ship:** production preview, browser QA, clean teardown, and handoff.
+
+At each checkpoint provide the command, changed files, expected behavior, one
+common failure and fix, and the next safe experiment. Do not dump an unexplained
+framework on a novice.
+
+## Phase 0: Discovery And Version Truth
+
+Read `official-docs.md` and inspect:
+
+- package manager, scripts, lockfile, installed `three` and type versions
+- framework, entrypoint, renderer, camera, loop, state and resize owners
+- official addon imports, post stack, shaders, loaders and local assets
+- input devices, collision/physics, UI/audio, tests and debug hooks
+- target devices, deployment/base path and offline/runtime constraints
+- current console warnings, screenshots, performance metrics and known defects
+
+Run `npm ls three` and obtain `THREE.REVISION`. For greenfield work, compare
+the current stable npm version when network access exists. For existing work,
+use the installed revision until an upgrade is explicitly in scope.
+
+Choose one renderer path. Do not mix WebGL `ShaderMaterial`/`EffectComposer`
+recipes with WebGPU TSL/`RenderPipeline` recipes.
+
+Exit evidence: filled fact ledger, current run/build state, known entrypoints,
+highest-risk path, and relevant references selected.
+
+## Phase 1: Design And Definition Of Complete
+
+Read `game-design.md` and the applicable section of `genre-playbooks.md`.
 Define:
 
-- Player promise and target feeling.
-- Primary/secondary verbs.
-- Objective, pressure, reward/progression, and fail/retry.
-- Skill expression and deliberate non-goals.
-- Intended session length, content counts/families, victory or ending
-  condition, and explicit definition of complete for this game.
-- First space or encounter: start, first decision, threat, reward, landmark,
-  escalation, recovery, and failure readability.
-- Target viewport/device and starting render budget.
-- Highest-risk path: playability, input, physics, visuals, UI, performance, or
-  release.
+- player promise and target feeling
+- primary and secondary verbs
+- repeatable 5-30 second core loop
+- objective, pressure, reward/progression, consequence and retry
+- skill expression and readability promise
+- first space/encounter: start, choice, threat, reward, landmark, escalation,
+  recovery and failure explanation
+- session length, content families/counts, progression arc and ending
+- target inputs/devices, accessibility needs and performance tier
+- explicit non-goals and definition of complete
 
-Exit evidence: design contract, first encounter plan, known project entrypoints,
-and initialized ledgers.
+Run the rejection tests: the first 30 seconds need a decision; the main
+mechanic cannot be ignored; failure must be understandable; rewards must change
+state or strategy; and the space must shape decisions.
 
-## Phase 2: Playable Loop
+Exit evidence: compact design brief, core-loop sentence, level/encounter plan,
+content target, difficulty plan and completion definition.
 
-Build gameplay before deep visual polish:
+## Phase 2: Architecture And Foundation
 
-- Renderer, scene, camera, resize, and one animation loop.
-- Device input mapped into intents.
-- Explicit game states and transition ownership.
-- Player, one challenge, one reward/progress path, and one fail or setback path.
-- Collision or physics, score/objective state, restart cleanup.
-- Minimal HUD, local audio/VFX hooks, and diagnostics.
-- Seeded randomness and stable update order.
+Read `fundamentals.md`, `gameplay-architecture.md`, `spatial-contracts.md`, and
+the renderer-specific sections of `rendering.md` and `shaders.md`.
 
-Use a fixed simulation step when timing-sensitive collision or physics exists.
-Keep detailed render geometry separate from simple gameplay proxies.
+Establish one owner for renderer, active camera, animation loop, timer,
+simulation, game state, input actions, resize, loading manager/cache, audio
+context, UI bridge, diagnostics and teardown.
 
-Exit evidence: build passes, canvas renders, real input changes state, objective
-progresses, pressure occurs, and fail/retry works when applicable.
+Choose and document:
 
-## Phase 3: Local Content And Art Direction
+- WebGL or WebGPU, post stack and shader language
+- meters/world units, +Y up, forward convention and imported-model boundary
+- variable presentation time and fixed simulation time where needed
+- explicit state transitions and update order
+- action-based input map with per-device source tracking
+- camera mode and camera collision/occlusion approach
+- collision proxies, layer/mask model and world-query contract
+- local asset directories, cache rules, fallback/loading/error states
+- material/color/environment policy and quality tiers
+- per-subsystem disposal responsibilities
 
-Fill the local content plan and provenance inventory before broad graphics
-work. No row may select a remote provider. Prefer a small, coherent set over a
-large placeholder world.
+Add diagnostics early: revision/backend, game state, entity counts, player
+transform/speed, input actions, renderer calls/triangles/geometries/textures,
+physics counts/timestep, canvas size/DPR and current quality tier.
 
-Block out scale and decisions first. Then author:
+Exit evidence: compiling foundation, one rendering loop, resize, deterministic
+test hooks, declared contracts and clean teardown path.
 
-- One readable hero/player with front/up/side cues and state sockets.
-- Distinct threat families with silhouette and anticipation.
-- Desirable rewards/interactables with idle and collection states.
-- A reusable world kit across play, near, middle, far, and motion layers.
-- Shared material roles and procedural trim/decals/textures.
-- Collision proxies, bounds, and diagnostics.
+## Phase 3: First Complete Playable
 
-If local imported files exist, normalize them at one asset boundary and verify
-scale, axes, pivot, materials, clips, file size, texture cost, and disposal.
+Implement gameplay before deep polish:
 
-Exit evidence: active frame no longer depends on placeholder geometry; each
-visible surface has a local source and gameplay purpose.
+- real input changes authoritative player state
+- one challenge or threat creates pressure
+- one reward or progress path advances the objective
+- collision/triggers and game rules emit semantic events
+- minimal HUD communicates objective and status
+- fail/setback and retry restore all state cleanly
+- one audio and one visual feedback event prove event integration
+- seeded randomness makes the route reproducible
 
-## Phase 4: Visual Systems
+Use a fixed simulation step when contact, projectile speed, bounce, or fairness
+depends on timing. Keep render geometry separate from collision proxies.
 
-Improve the image in dependency order:
+Exit evidence: build passes, canvas renders, real input works, objective
+progresses, pressure occurs, reward changes state, and fail/retry completes.
 
-1. Camera framing, silhouette, and screen occupancy.
-2. Spatial depth and readable near/mid/far composition.
-3. Authored geometry and material identity.
-4. Key/fill/rim/contact lighting and intentional shadows.
-5. Atmosphere, fog, and background hierarchy.
-6. Event-driven VFX and motion.
-7. Post-processing with on/off comparison.
+## Phase 4: Content, World And Asset Integration
 
-Write a technical-art brief and target budget before costly shader, shadow, or
-post work. Measure the worst active state, not an idle menu.
+Read `geometry.md`, `materials-textures.md`, `loaders-animation.md`,
+`local-assets.md`, `procedural-modeling.md`, and `visual-architecture.md` as
+needed.
 
-Exit evidence: before/after active captures, renderer diagnostics, target vs
-actual budget, post-disabled readability, dense-state check, and mobile tradeoff
-when mobile is in scope.
+Build a small authored kit:
 
-## Phase 5: UI, Audio, And Accessibility
+- hero with readable front/up/side, state sockets and motion language
+- threats with distinct silhouette, anticipation and consequence
+- rewards with desirable idle, collection and spent states
+- play, near, middle, far and motion world layers
+- landmarks, navigation/readability cues and reusable modular pieces
+- shared material roles, texture/trim/decal strategy and environment source
+- animation state map and clean transitions for animated characters
+- simplified bounds, collision and LOD/instancing/batching strategy
 
-Inventory gameplay, pause, settings, fail/retry, win/milestone, loading/error,
-and touch states. Build a game interface, not a dashboard. Keep values stable,
-use semantic controls, protect safe areas, and dispatch the same intents from
-keyboard, pointer, touch, and gamepad paths.
+Normalize local imports once. Never scatter arbitrary scale/rotation fixes
+through entity code. Test an asset in motion, under the final camera and lights,
+with its collider and teardown path.
 
-Build audio from Web Audio synthesis or local files. Use master/music/SFX/UI
-buses, unlock from a gesture, couple cues to game events, and cleanly pause,
-restart, mute, and dispose voices.
+Exit evidence: filled content ledger; no accidental placeholder dependence in
+the active frame; import/provenance/bounds/clip/texture diagnostics.
 
-Protect readability with reduced motion, shake/flash limits, shape backup for
-color, keyboard focus, and captions/text equivalents where appropriate.
+## Phase 5: Visual Systems
 
-Exit evidence: relevant state captures, real UI/touch actions, text fit,
-safe-area/touch checks, mute/pause/restart audio checks, and no duplicated game
-rules in UI.
+Read `rendering.md`, `lighting-shadows.md`, `shaders.md`, and
+`technical-art.md`. Improve in this order:
 
-## Phase 6: Debug And Performance
+1. camera framing, screen occupancy and silhouette
+2. decision-space readability and near/mid/far depth
+3. authored proportion, geometry and surface hierarchy
+4. material identity and correct color/data texture handling
+5. environment, key/fill/rim/contact light and disciplined shadows
+6. background, atmosphere and fog hierarchy
+7. event-driven motion, particles, trails, impacts and state cues
+8. renderer-appropriate post-processing with an on/off comparison
 
-Reproduce first. Capture the first console, page, and local asset error. Find
-the owner before editing: renderer, scene, camera, loop, state, asset, audio,
-input, physics, UI/CSS, build/base path, CPU, GPU, or memory.
+Write a render budget before costly work. Measure the worst active state, not
+the menu. Keep bloom, depth of field, motion blur, SSR and heavy transparency
+on a strict visual-purpose and performance budget.
 
-For optimization, record the scenario and baseline. Change one bottleneck at a
-time: reuse, instancing, culling, LOD, pooling, disposal, adaptive DPR, cheaper
-shadows/post, simpler colliders, or allocation removal. Re-measure the identical
-scenario and check that playability and readability survive.
+Exit evidence: active before/after captures, post-disabled capture, renderer
+diagnostics, target-versus-actual budget, dense-state check and mobile tradeoff.
 
-Exit evidence: root cause or bottleneck, fix owner, baseline/post metrics, and
-exact broken path retested.
+## Phase 6: Feel, UI, Audio And Accessibility
 
-## Phase 7: QA And Release
+Read `game-feel.md`, `ui.md`, `audio.md`, and `interaction.md`.
 
-Verify in the production story:
+- Tune input response, acceleration/deceleration, turn/aim and recovery first.
+- Map semantic events to proportional animation, VFX, camera, HUD, audio and
+  optional rumble. Keep real, simulation and presentation clocks distinct.
+- Build gameplay, pause, settings, loading/error, fail/retry, win/milestone and
+  touch states from canonical game state.
+- Use semantic buttons, keyboard focus, safe areas, readable touch targets,
+  reduced motion, color-independent cues and text/caption alternatives.
+- Unlock audio from a gesture; implement master/music/SFX/UI buses, mute,
+  pause/resume, restart cleanup and bounded voices.
 
-- Build/typecheck and focused tests.
-- Correct local dev or production-preview URL.
-- Console/page errors and nonblank canvas.
-- Main input, objective progression, pressure, fail/retry, pause/resume.
-- Desktop composition; mobile input/composition when in scope.
-- HUD text fit, safe areas, touch cancellation, resize/orientation.
-- Audio gesture unlock, triggers, mute, pause, restart, and disposal.
-- Renderer and physics diagnostics after relevant changes.
-- Visual-regression decision and bot-playtest decision.
-- Static base path, local asset URLs, debug gating, bundle/large files, licenses.
-- `scripts/audit_local_only.py` with no unapproved runtime dependency.
+Exit evidence: relevant state captures, real UI/touch actions, text-fit and
+safe-area checks, reduced-motion behavior, audio unlock/mute/pause/retry and no
+duplicated game rules in presentation code.
 
-For premium/showcase claims, complete the scorecard and independent/fresh-eyes
-review using the entire active capture set.
+## Phase 7: Performance, Reliability And Memory
 
-Exit evidence: commands and pass/fail, URL, controls, artifacts, diagnostics,
-issues fixed or owned, and residual risks.
+Read `debugging-performance.md` and `technical-art.md`. Reproduce and measure
+before editing. Record a named worst-case scenario, viewport/DPR, renderer/GPU,
+quality tier, frame-time distribution, renderer counts and memory proxies.
+
+Optimize one owner at a time:
+
+- CPU: hot-loop allocations, search breadth, AI frequency, collision broadphase
+- submission: shared resources, `InstancedMesh`, `BatchedMesh`, merging, pools
+- geometry: visibility, frustum culling, LOD with hysteresis, far simplification
+- pixel: DPR, shadow coverage/resolution, transparency/overdraw, post resolution
+- textures: dimensions, formats, mipmaps, local KTX2, duplicate ownership
+- lifecycle: stale listeners, controls, mixers, workers, render targets, audio
+
+Re-measure the identical scenario. Test resize, visibility changes, pause,
+restart, repeated enter/exit and failed asset loads. A higher FPS that breaks
+readability, fairness or disposal does not pass.
+
+Exit evidence: baseline and after metrics, identified bottleneck, retained
+quality, memory/re-entry check and known device limits.
+
+## Phase 8: QA, Release And Claims
+
+Read `qa-release.md`, `visual-regression.md`, `bot-playtesting.md`, and quality
+references when applicable.
+
+Verify:
+
+- production build/typecheck and focused tests
+- production preview at the actual base path
+- console/page/asset errors and nonblank canvas
+- controls, objective, pressure, reward, failure, retry, ending and pause
+- desktop composition; touch/orientation/safe-area when mobile is in scope
+- audio gesture, mute, pause/restart and voice cleanup
+- renderer/physics/performance diagnostics in a dense active state
+- asset failure/retry and repeated teardown/re-entry
+- deterministic harness states and visual-baseline decision
+- scripted completion/softlock/difficulty decision
+- local-only static audit and live outbound-request evidence
+- licenses/provenance, debug gating and large-file/bundle review
+
+For premium/showcase, score all categories against the packaged anchors, cite
+measured evidence, list automatic failures, and obtain a fresh-eyes review. If a
+gate fails, continue or report the exact blocker; do not rename the result.
+
+Exit evidence: commands and pass/fail, URL, controls, screenshots/artifacts,
+diagnostics, issues fixed, checks not run and owned residual risks.
+
+## Implementation Change Loop
+
+For every phase or focused change:
+
+1. State the player-visible acceptance condition.
+2. Reproduce or capture the baseline.
+3. Identify the single owner to change.
+4. Implement the smallest coherent change.
+5. Run compile/unit checks immediately.
+6. Exercise the real browser path and inspect errors.
+7. Compare behavior and metrics to the baseline.
+8. Update ledgers, tuning constants and disposal ownership.
+9. Continue if the acceptance condition or requested quality label still fails.
 
 ## Completion Gate
 
-Broad work is complete only when the requested loop is playable through real
-input, the design and level contracts match what was implemented, local content
-is integrated, UI/audio communicate state, the build passes, and unrun checks
-are disclosed.
+Broad work is complete only when the promised loop is playable through real
+input, its design/level contracts match implementation, the declared content
+exists, UI/audio/feedback communicate state, resources have owners, the build
+and production preview pass, and unrun checks are disclosed.
 
-Premium/showcase work must also pass `quality-gates.md`. Release-ready work must
-exercise production preview and the bot/visual-harness decisions. If a gate
-fails, continue or report the exact blocker; do not relabel the outcome.
+Premium/showcase work must additionally pass the quality scorecard and dense
+state budgets. Release work must additionally prove the production URL/base
+path, browser/device matrix, visual/bot decisions and residual-risk ownership.

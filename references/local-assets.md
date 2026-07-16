@@ -118,6 +118,7 @@ export async function loadLocalActor(url: string) {
     ? new THREE.AnimationMixer(gltf.scene)
     : undefined;
   const clips = new Map(gltf.animations.map((clip) => [clip.name, clip]));
+  let currentAction: THREE.AnimationAction | undefined;
 
   return {
     root: wrapper,
@@ -125,16 +126,21 @@ export async function loadLocalActor(url: string) {
     update(deltaSeconds: number) {
       mixer?.update(deltaSeconds);
     },
-    play(name: string) {
+    play(name: string, fadeSeconds = 0.12) {
       const clip = clips.get(name);
       if (!clip || !mixer) return false;
-      mixer.stopAllAction();
-      mixer.clipAction(clip).reset().fadeIn(0.12).play();
+      const nextAction = mixer.clipAction(clip);
+      if (nextAction === currentAction) return true;
+      nextAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).play();
+      if (currentAction) currentAction.crossFadeTo(nextAction, fadeSeconds, false);
+      else nextAction.fadeIn(fadeSeconds);
+      currentAction = nextAction;
       return true;
     },
     dispose() {
       mixer?.stopAllAction();
       mixer?.uncacheRoot(gltf.scene);
+      currentAction = undefined;
       // Dispose through the project's shared scene/material/texture disposer.
     },
   };

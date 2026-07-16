@@ -1,58 +1,67 @@
 # Three.js Game Studio
 
-A local-first agent skill for designing, building, polishing, debugging, testing,
-and releasing complete browser games with plain Three.js.
+A single, self-contained AI skill for planning, building, polishing, debugging,
+optimizing, testing, and releasing complete browser games with Three.js.
 
-It combines provider-independent guidance adapted from
-`mintdotgg/mint-threejs-skills` and `majidmanzarpour/threejs-game-skills` into
-one cohesive game-development workflow.
+The root `SKILL.md` is the sole coordinator. It inspects the project and Three.js
+revision, chooses the WebGL or WebGPU path, translates novice ideas into safe
+defaults, loads only the relevant internal reference chapters, sequences the
+work from design through release, and requires browser evidence before making
+quality claims.
 
-## Local-only by design
+## Current baseline
 
-- No MCP dependency.
-- No hosted generators, provider SDKs, remote APIs, CDNs, analytics, or
-  credential probes.
-- Three.js and browser APIs are the runtime foundation.
-- Vite, TypeScript, Playwright, and Python scripts are local development and
-  verification tools.
-- Assets are procedural, project-owned, or explicitly supplied as local files.
+- Three.js r185 / `three@0.185.1`, verified 2026-07-17.
+- Vite 8 and TypeScript 6 starter project.
+- `THREE.Timer` and `renderer.setAnimationLoop()`.
+- `WebGLRenderer` as the novice-safe default.
+- A documented `WebGPURenderer` + TSL + `RenderPipeline` route.
+- Official addon imports from `three/addons/...`.
+- Local-first runtime assets and browser verification.
+
+Every task still begins by inspecting the installed Three.js revision. The live
+documentation can move ahead of npm, so the skill checks version-matching APIs
+and the official migration guide before changing an existing project.
 
 ## What is included
 
-- End-to-end game direction, scope, progression, and genre playbooks.
-- Gameplay architecture, deterministic simulation, collision, camera, input,
-  game feel, audio, UI, shaders, rendering, and technical art.
-- Local GLB/FBX intake guidance, animation ownership, provenance, optimization,
-  and disposal.
-- Browser QA, bot playtesting, visual regression, performance budgets, quality
-  gates, and release evidence.
-- A Vite + TypeScript + Three.js starter scaffold with desktop/touch controls,
-  procedural audio, diagnostics, and Playwright coverage.
+- A coordinator workflow for learning checkpoints, focused fixes, full games,
+  premium/showcase passes, and release candidates.
+- Beginner foundations for scene graphs, cameras, coordinates, transforms,
+  timers, resizing, loading, errors, and disposal.
+- Current renderer-specific guidance for WebGL/GLSL/EffectComposer and
+  WebGPU/TSL/RenderPipeline without mixing incompatible recipes.
+- Game design, genre completion contracts, state, input actions, camera rigs,
+  collision, fixed simulation, AI/director patterns, game feel, UI,
+  accessibility, Web Audio, and WebXR.
+- Geometry, batching, instancing, LOD, glTF/compressed local assets, animation
+  state machines, PBR, textures/color, lighting, shadows, shaders, VFX, and
+  post-processing.
+- Performance budgets, deterministic test hooks, canvas inspection, visual
+  regression, bot playtesting, production-preview QA, evidence reports, and
+  local-runtime audits.
+- A runnable Vite + TypeScript mini-game scaffold with desktop/touch controls,
+  procedural audio, pause/retry/win/fail states, diagnostics, Playwright tests,
+  and explicit teardown.
 
-The complete operating instructions are in [`SKILL.md`](SKILL.md). Supporting
-guidance lives in [`references/`](references/), while reusable templates and the
-starter project live in [`assets/`](assets/).
+Operational guidance lives in `SKILL.md` and `references/`. Reusable project
+templates and the starter game live in `assets/`; validation and scaffold tools
+live in `scripts/`.
 
-## Install as a Codex skill
+## Install locally
 
-Install directly with the Skills CLI:
+Copy or clone this repository so `SKILL.md` remains at the skill root, then add
+that local directory with the Skills CLI or copy it into your local Codex skills
+directory.
 
 ```bash
-npx skills add https://github.com/chrislaupama/threejs-game-studio
+npx skills add /absolute/path/to/threejs-game-studio
 ```
 
-Alternatively, copy a local checkout into your Codex skills directory with
-`SKILL.md` at its root:
+Start a new task and invoke `$threejs-game-studio`, or ask to build, upgrade,
+debug, optimize, teach, or release a Three.js game.
 
-```bash
-cp -R /path/to/threejs-game-studio ~/.codex/skills/threejs-game-studio
-```
-
-Then start a new Codex task and ask it to build, upgrade, debug, optimize, or
-release a Three.js game. The skill routes broad game requests through the full
-workflow and narrow requests through only the relevant references.
-
-## Create a starter game
+## Create the starter game
 
 ```bash
 python3 scripts/create_threejs_game.py ./my-game
@@ -61,21 +70,32 @@ npm install
 npm run dev
 ```
 
-Before releasing a generated or existing game, run the local-only audit:
+The scaffold is a playable teaching and production baseline, not a fixed game
+design. Replace its arena, entities, rules, tuning, art direction, and content
+while preserving useful ownership and verification seams.
 
-```bash
-python3 scripts/audit_local_only.py ./my-game
-```
-
-To validate changes to this skill package itself:
+## Validate this package
 
 ```bash
 python3 -m unittest discover -s scripts -p 'test_*.py'
+python3 scripts/audit_skill_structure.py .
 python3 scripts/audit_skill_local_only.py .
+cd assets/threejs-vite-game
+npm install
+npm run build
+npm run test
 ```
 
-## License and attribution
+Before releasing a generated game, also run its `npm run audit:local`, production
+preview, canvas inspection, and applicable browser/mobile checks.
 
-Released under the MIT License. See [`NOTICE.md`](NOTICE.md) for upstream
-attribution, pinned source commits, adapted scope, and excluded provider
-integrations.
+## Documentation sources and attribution
+
+Technical guidance is continuously checked against the official
+[Three.js documentation](https://threejs.org/docs/),
+[manual](https://threejs.org/manual/), and
+[examples](https://threejs.org/examples/). Legal and research attribution is
+kept separately in `NOTICE.md`; none of those sources is an operational skill
+dependency.
+
+Released under the MIT License.

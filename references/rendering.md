@@ -1,115 +1,483 @@
-# Render, Lighting, And VFX Recipes
+# Rendering, Cameras, Lighting, And Post
 
 ## Contents
 
-- Renderer and camera composition
-- Lighting, contact, materials, fog, and depth
-- Post-processing, event VFX, readability, and performance
+- Renderer decision and WebGL baseline
+- Pixel ratio, resize, and output ownership
+- Linear workflow and texture color spaces
+- Camera framing and depth precision
+- PBR materials, environment, and lighting
+- Shadows and transparency
+- WebGL and WebGPU post-processing boundaries
+- Renderer diagnostics and failure checks
+- Performance and visual QA
 
-Use this after authored forms exist. Rendering polish cannot compensate for
-missing models, context, or readable interaction silhouettes.
+Choose the renderer and output pipeline before authoring shaders or effects.
+Keep all runtime modules, textures, environments, and decoder files local.
+Official links in this reference document API intent; they are not runtime
+dependencies.
 
-## Renderer Setup
+## Renderer Decision
 
-- Set `renderer.outputColorSpace = THREE.SRGBColorSpace`.
-- Choose tone mapping deliberately. `ACESFilmicToneMapping` often works for cinematic stylized scenes; simpler tone mapping can be better for bright arcade readability.
-- Tune exposure against the active user journey, not an unrelated title view.
-- Cap DPR, especially on mobile. Start around `Math.min(devicePixelRatio, 1.5 or 2)` and profile.
-- Update renderer, camera, composer, and CSS UI dimensions on resize.
-- Use a transparent or explicit background only when composition requires it.
-- Treat WebGPU as opt-in only when its player-facing or performance benefit is
-  material and verified. Preserve and test a WebGL/WebGL2 path unless the user
-  explicitly accepts narrower browser/device support.
+Use [WebGLRenderer](https://threejs.org/docs/pages/WebGLRenderer.html) as the
+default for production WebGL 2 games, current addon passes, and GLSL materials.
+WebGL 1 is not supported.
 
-## Camera Composition
+Choose [WebGPURenderer](https://threejs.org/docs/pages/WebGPURenderer.html) only
+when node materials, TSL post-processing, compute, or a measured WebGPU feature
+justifies its experimental status. It uses WebGPU when available and can fall
+back to WebGL 2. Read the official
+[WebGPURenderer guide](https://threejs.org/manual/en/webgpurenderer) before
+choosing it.
 
-- Author a design frame before tuning effects: name the subject, intended
-  screen occupancy, lens/FOV, horizon and up direction, near/far range, and
-  design viewing distance.
-- Scale camera offsets and clipping planes from subject or world bounds instead
-  of relying on unexplained constants.
-- Derive camera position and orientation separately around a semantic target.
-  Let one system own interpolation during each handoff to avoid stacked lag.
-- Keep the next decision visible. The camera should show player, immediate threat/reward, and route.
-- Add depth layers: foreground speed elements, playable midground, background scale cues.
-- Use FOV and camera distance to communicate speed without hiding hazards.
-- Use camera shake sparingly and clamp intensity.
-- Add camera impulses for hits/near misses/boosts, then ease back quickly.
-- Check mobile framing separately; vertical and narrow layouts often need different offsets.
+Never mix these customization stacks:
 
-## Lighting Stack
+| Renderer | Custom material | Post-processing |
+| --- | --- | --- |
+| `WebGLRenderer` | GLSL `ShaderMaterial`, `RawShaderMaterial`, `onBeforeCompile` | `EffectComposer` and addon passes |
+| `WebGPURenderer` | Node materials and TSL | `RenderPipeline` and TSL nodes |
 
-Use a small readable stack:
+Declare what **WebGL fallback** means; two different architectures use that
+phrase:
 
-- Key light: defines form and direction.
-- Fill light: keeps primary and interactive objects legible.
-- Rim/back light: separates player and hazards from background.
-- Practical/emissive lights: authored beacons, engines, pickups, arena markers.
-- Contact shadows or shadow blobs: ground important objects.
+1. One `WebGPURenderer` can use its WebGPU backend normally and its WebGL 2
+   backend with `forceWebGL: true`. This is appropriate only when the whole
+   render path uses node materials/TSL and features supported by both backends.
+2. A project that must preserve GLSL, `onBeforeCompile`, or `EffectComposer`
+   needs a separate `WebGLRenderer` adapter plus a WebGPU/TSL adapter. The
+   WebGPURenderer's WebGL backend does not make a WebGLRenderer-only shader or
+   pass stack compatible.
 
-Avoid many unmeasured dynamic lights. Prefer baked-looking material/emissive cues, light cards, or small unlit decals for repeated signals.
+Choose the backend at boot and reload when the player changes it. Do not hot
+swap live GPU state. Record the renderer class and actual backend separately in
+diagnostics, and exercise native WebGPU, `forceWebGL: true`, and the preserved
+`WebGLRenderer` path only when each is genuinely claimed.
 
-## Shadows And Contact
+## WebGL Renderer Baseline
 
-- Use shadows for the primary subject, important interactables, and large anchors.
-- Use smaller shadow maps and limited shadow casters when profiling shows cost.
-- Add cheap contact discs or transparent planes for pickups/hovering objects.
-- Tune bias to avoid acne and peter-panning.
-- Do not let shadows hide collision reads.
+Start with explicit ownership and conservative buffers:
 
-## Materials
+```ts
+import * as THREE from 'three';
 
-Define material roles with the material kit in `references/technical-art.md` (`MeshStandardMaterial` for most surfaces, `MeshPhysicalMaterial` only where the premium feature is visible). At render time:
+const canvas = document.querySelector<HTMLCanvasElement>('#game');
+if (!canvas) throw new Error('Missing #game canvas');
 
-- Prefer material contrast before post effects: matte vs glossy, metal vs plastic, transparent vs opaque, bright trim vs dark contact.
-- Use emissive maps or small emissive parts for signals instead of making entire objects glow.
-- Keep material roles matched across UI and world: danger, reward, shield, boost, objective.
+const renderer = new THREE.WebGLRenderer({
+  canvas,
+  antialias: true,
+  alpha: false,
+  depth: true,
+  stencil: false,
+  powerPreference: 'high-performance',
+});
 
-## Fog, Background, And Depth
+renderer.outputColorSpace = THREE.SRGBColorSpace; // current default, explicit contract
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1;
+renderer.setClearColor(0x0b1018, 1);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+```
 
-- Fog should reveal depth and mood, not hide empty worlds.
-- Layer background silhouettes at varied scales and heights.
-- Add parallax or slow-moving far layers for motion-heavy games.
-- Avoid single flat sky colors when the world needs scale; use gradients only as support, not the whole art direction.
-- Keep hazards/rewards readable against fog and background values.
+Only request `alpha`, `stencil`, logarithmic depth, preserve-drawing-buffer, or
+other expensive/specialized options when the design needs them. Constructor
+options cannot generally be changed later. Prefer an opaque canvas and scene
+background unless the game must composite over HTML.
 
-## Post-Processing
+Do not set removed `outputEncoding`, gamma flags, `physicallyCorrectLights`, or
+`useLegacyLights`. Retune lights under the current rendering model.
 
-Use post as a finishing pass:
+## Resize And Output Ownership
 
-- Keep final-image ownership explicit. Order applicable stages as HDR scene,
-  lighting screen effects, atmosphere/transparency, bloom, exposure, tone
-  mapping, grading/lens treatment, then output color conversion.
-- Apply tone mapping and output color conversion exactly once.
-- Provide pass toggles and effect-only views for effects that are difficult to
-  judge from the composite image.
+Keep one function responsible for renderer, camera, composer/pipeline, and any
+screen-sized render targets. Resize only when CSS dimensions or capped DPR
+change. The official [responsive guide](https://threejs.org/manual/en/responsive.html)
+explains CSS pixels versus drawing-buffer pixels.
 
-- Bloom: only authored emissive elements, not all bright materials.
-- Vignette: subtle focus, never heavy darkness.
-- Film grain/noise: low opacity; avoid compression-like artifacts.
-- Chromatic aberration: only brief event-driven impacts or very subtle style.
-- Motion blur/trails: prefer geometry trails or particles that preserve interaction clarity.
+```ts
+function resizeFrame(
+  renderer: THREE.WebGLRenderer,
+  camera: THREE.PerspectiveCamera,
+  composer?: EffectComposer,
+) {
+  const canvas = renderer.domElement;
+  const width = Math.max(1, canvas.clientWidth);
+  const height = Math.max(1, canvas.clientHeight);
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const bufferWidth = Math.floor(width * dpr);
+  const bufferHeight = Math.floor(height * dpr);
 
-Always compare screenshots with post enabled/disabled, confirm the no-post
-scene remains readable, and profile the cost.
+  const pixelRatioChanged = renderer.getPixelRatio() !== dpr;
+  if (
+    !pixelRatioChanged &&
+    canvas.width === bufferWidth &&
+    canvas.height === bufferHeight
+  ) return;
 
-## Event-Driven VFX
+  renderer.setPixelRatio(dpr);
+  renderer.setSize(width, height, false);
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
 
-Tie effects to state using the event-driven VFX language in `references/technical-art.md` (pickup, hit/fail, boost/speed, near miss/combo, shield/invulnerable, spawn/despawn). Pool effects, reuse geometries/materials, and keep permanent particle fields cheap and sparse.
+  composer?.setPixelRatio(dpr);
+  composer?.setSize(width, height);
+}
+```
 
-## Readability Checks
+If post-processing renders the final image, call only `composer.render()` or
+`renderPipeline.render()` for that frame. Do not also call
+`renderer.render(scene, camera)` and accidentally render twice.
 
-During active play, confirm:
+Apply tone mapping and output color conversion exactly once. For WebGL
+`EffectComposer`, place `OutputPass` last. For WebGPU `RenderPipeline`, keep its
+automatic output transform enabled unless a specific effect requires an
+earlier `renderOutput()` node.
 
-- Player orientation is clear.
-- Threats differ from rewards by both shape and material.
-- Important pickups are visible before reaction time expires.
-- UI feedback does not cover the play path.
-- VFX clarifies state instead of obscuring collisions.
-- Background contrast does not swallow dark objects.
+## Color Management
 
-## Performance Checks
+Three.js uses a Linear-sRGB working space and enables color management by
+default. The renderer's output color space defaults to sRGB. Read the official
+[color-management guide](https://threejs.org/manual/en/color-management.html)
+and [Texture.colorSpace API](https://threejs.org/docs/pages/Texture.html).
 
-After render changes, report the renderer diagnostics from `references/technical-art.md` (calls, triangles, geometries, textures, materials, DPR/post/shadow settings), plus FPS/frame time and composer/post pass count when available.
+Classify every texture by meaning:
 
-If performance drops, reduce post/shadow cost first, then cull/LOD/instance, then reduce asset density only where it is least visible.
+```ts
+const baseColor = await textureLoader.loadAsync('/assets/textures/hull-color.webp');
+baseColor.colorSpace = THREE.SRGBColorSpace;
+
+const emissive = await textureLoader.loadAsync('/assets/textures/hull-emissive.webp');
+emissive.colorSpace = THREE.SRGBColorSpace;
+
+const normal = await textureLoader.loadAsync('/assets/textures/hull-normal.webp');
+normal.colorSpace = THREE.NoColorSpace;
+
+const roughness = await textureLoader.loadAsync('/assets/textures/hull-roughness.webp');
+roughness.colorSpace = THREE.NoColorSpace;
+```
+
+- Mark base color, emissive color, UI art, and other display-referred color
+  textures as `SRGBColorSpace`.
+- Leave normal, roughness, metalness, AO, displacement, masks, lookup data, and
+  other non-color textures at `NoColorSpace`.
+- Keep HDR/EXR environment data in its loader-provided linear color space.
+- Let `GLTFLoader` apply the glTF color-space conventions; avoid overriding
+  imported texture metadata without inspecting the material role.
+- Treat numeric `Color` hex and CSS inputs as sRGB inputs converted into the
+  working space. When setting raw linear components, state the source space.
+
+Wrong color-space annotation cannot be fixed reliably by exposure or bloom.
+Inspect a neutral gray, saturated color, matte dielectric, metal, and emissive
+reference before grading the whole scene.
+
+## Tone Mapping And Exposure
+
+Choose a tone mapper based on the art direction and gameplay read. Current
+[WebGLRenderer](https://threejs.org/docs/pages/WebGLRenderer.html) choices
+include no tone mapping, Linear, Reinhard, Cineon, ACES Filmic, AgX, Neutral,
+and custom tone mapping.
+
+```ts
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1;
+```
+
+- Use one exposure control for the scene; do not compensate each material for
+  an unstable global exposure.
+- Check bright emissive cues, white UI, dark hazards, and adaptation between
+  spaces.
+- Do not let bloom become a replacement for an authored emissive hierarchy.
+- Compare post on/off and preserve interaction readability in the unprocessed
+  image.
+
+## Camera Integration
+
+Use a [PerspectiveCamera](https://threejs.org/docs/pages/PerspectiveCamera.html)
+for most action games. Keep near/far tight and update projection after changes:
+
+```ts
+const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 500);
+camera.position.set(0, 5, 9);
+camera.lookAt(0, 1, 0);
+```
+
+Frame a bounded subject without unexplained distance constants:
+
+```ts
+const bounds = new THREE.Box3().setFromObject(subject);
+const sphere = bounds.getBoundingSphere(new THREE.Sphere());
+const halfFov = THREE.MathUtils.degToRad(camera.fov * 0.5);
+const distance = sphere.radius / Math.max(Math.sin(halfFov), 0.01);
+const viewDirection = new THREE.Vector3(0.7, 0.45, 1).normalize();
+
+camera.position.copy(sphere.center).addScaledVector(viewDirection, distance * 1.2);
+camera.near = Math.max(0.05, distance / 100);
+camera.far = Math.max(camera.near + 10, distance * 10);
+camera.lookAt(sphere.center);
+camera.updateProjectionMatrix();
+```
+
+Then tune for gameplay: show the player, next decision, threat, reward, and
+route. Test narrow/mobile aspect ratios separately. Let one system own camera
+pose and interpolation during a state transition; stacked controls, follow lag,
+shake, and cutscene tweens create unpredictable framing.
+
+Use [CameraHelper](https://threejs.org/docs/pages/CameraHelper.html) for shadow,
+portal, minimap, and secondary-camera debugging. Remove or gate helpers in
+production.
+
+## PBR Materials And Environment
+
+Use [MeshStandardMaterial](https://threejs.org/docs/pages/MeshStandardMaterial.html)
+for most PBR surfaces. Use
+[MeshPhysicalMaterial](https://threejs.org/docs/pages/MeshPhysicalMaterial.html)
+only when clearcoat, transmission, sheen, iridescence, or another visible
+physical feature earns its cost.
+
+```ts
+const paintedMetal = new THREE.MeshPhysicalMaterial({
+  color: 0x245ec7,
+  metalness: 0,
+  roughness: 0.42,
+  clearcoat: 0.75,
+  clearcoatRoughness: 0.18,
+});
+
+const bareMetal = new THREE.MeshStandardMaterial({
+  color: 0xaab2bd,
+  metalness: 1,
+  roughness: 0.36,
+});
+
+const rubber = new THREE.MeshStandardMaterial({
+  color: 0x090a0d,
+  metalness: 0,
+  roughness: 0.92,
+});
+```
+
+Metals require something meaningful to reflect. Load a project-local HDR
+environment with the current [HDRLoader](https://threejs.org/docs/pages/HDRLoader.html):
+
+```ts
+import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
+
+const environment = await new HDRLoader().loadAsync('/assets/hdr/arena.hdr');
+environment.mapping = THREE.EquirectangularReflectionMapping;
+scene.environment = environment;
+scene.background = environment;
+scene.backgroundBlurriness = 0.2;
+```
+
+Dispose the environment texture when its scene owner is destroyed. Use
+`scene.environmentIntensity`, material `envMapIntensity`, and exposure as
+separate controls; document which owner is allowed to tune each.
+
+## Lighting Integration
+
+Start with a small readable stack and inspect it without post-processing. The
+official [lights manual](https://threejs.org/manual/en/lights.html) documents
+the light families and their costs.
+
+```ts
+const skyFill = new THREE.HemisphereLight(0xbad8ff, 0x171a24, 1.1);
+scene.add(skyFill);
+
+const key = new THREE.DirectionalLight(0xfff1dc, 3);
+key.position.set(8, 12, 6);
+key.target.position.set(0, 0, 0);
+scene.add(key, key.target);
+
+const rim = new THREE.DirectionalLight(0x70a7ff, 1.5);
+rim.position.set(-8, 5, -10);
+scene.add(rim);
+```
+
+- Use the key to define form and direction.
+- Use restrained fill to preserve readable shadow-side detail.
+- Use rim/back light or authored emissive trim to separate important actors.
+- Prefer emissive surfaces, light cards, or unlit decals over many repeated
+  real-time lights.
+- Limit shadow-casting lights. A point light shadow renders six directions.
+- Profile the densest gameplay state, not an empty lighting test.
+
+## Shadows
+
+Enable current shadow mapping deliberately:
+
+```ts
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+
+key.castShadow = true;
+key.shadow.mapSize.set(1024, 1024);
+key.shadow.camera.near = 1;
+key.shadow.camera.far = 40;
+key.shadow.camera.left = -12;
+key.shadow.camera.right = 12;
+key.shadow.camera.top = 12;
+key.shadow.camera.bottom = -12;
+key.shadow.bias = -0.0002;
+key.shadow.normalBias = 0.02;
+
+hero.castShadow = true;
+ground.receiveShadow = true;
+```
+
+Use `PCFShadowMap`, not deprecated `PCFSoftShadowMap`. Keep the shadow camera
+tight, select the smallest map that holds up in the active camera, and inspect
+it with `CameraHelper`. For static scenes, set `light.shadow.autoUpdate = false`
+after the first render and set `needsUpdate = true` when a caster, receiver, or
+light changes. See the official [shadow guide](https://threejs.org/manual/en/shadows.html)
+and [LightShadow API](https://threejs.org/docs/pages/LightShadow.html).
+
+Use cheap contact blobs for repeated or hovering objects when a full shadow
+pass does not change gameplay understanding.
+
+## Transparency And Layering
+
+Treat transparency as sorted blending, not physical volume by default:
+
+- Prefer opaque or alpha-tested surfaces where possible.
+- Set `transparent: true` only when blending is required.
+- Use `alphaTest` for foliage/cards with hard-enough cutouts.
+- Disable `depthWrite` for selected additive or layered effects only after
+  checking intersection artifacts.
+- Use `renderOrder` as a narrow fix, not a substitute for correct depth and
+  material grouping.
+- Keep gameplay-critical silhouettes readable without transparent overlap.
+- Reserve `MeshPhysicalMaterial.transmission` for a few hero surfaces; it adds
+  extra rendering cost and can hide hazards behind refraction.
+
+Inspect front/back side requirements. `DoubleSide` costs more and changes
+raycasting/shading behavior; fix mesh winding or author thickness when possible.
+
+## WebGL Post-Processing
+
+Use `EffectComposer` only with `WebGLRenderer`. Start with a render pass and end
+with `OutputPass`, which performs output color conversion and configured tone
+mapping. Follow the official
+[WebGL post-processing guide](https://threejs.org/manual/en/how-to-use-post-processing.html).
+
+```ts
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+
+const bloom = new UnrealBloomPass(
+  new THREE.Vector2(1, 1),
+  0.45,
+  0.3,
+  0.9,
+);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+renderer.setAnimationLoop((timestamp) => {
+  timer.update(timestamp);
+  const delta = Math.min(timer.getDelta(), 0.1);
+  update(delta);
+  resizeFrame(renderer, camera, composer);
+  composer.render(delta);
+});
+```
+
+Keep bloom threshold high enough that authored emissive cues contribute and
+ordinary white surfaces do not wash out the frame. Measure every full-screen
+pass at the actual drawing-buffer resolution. Provide low-quality and no-post
+paths when the target device tier needs them.
+
+## WebGPU Post-Processing
+
+Do not use `EffectComposer` or GLSL passes with `WebGPURenderer`. Import the
+renderer family and TSL separately, then build a current
+[RenderPipeline](https://threejs.org/docs/pages/RenderPipeline.html):
+
+```ts
+import * as THREE from 'three/webgpu';
+import { pass } from 'three/tsl';
+
+const renderer = new THREE.WebGPURenderer({ antialias: true });
+const pipeline = new THREE.RenderPipeline(renderer);
+const scenePass = pass(scene, camera);
+
+pipeline.outputNode = scenePass;
+
+renderer.setAnimationLoop(() => {
+  pipeline.render();
+});
+```
+
+`RenderPipeline` applies tone mapping and output color conversion by default.
+If an effect such as FXAA specifically needs display-referred input, use
+[`renderOutput`](https://threejs.org/docs/pages/RenderOutputNode.html) at that
+point and set `pipeline.outputColorTransform = false` so conversion occurs only
+once.
+
+The old WebGPU `PostProcessing` wrapper is deprecated since r183. Do not emit
+it. Keep WebGPU examples behind an explicit renderer choice and verify both the
+WebGPU backend and `forceWebGL: true` fallback when fallback support is claimed.
+
+## Diagnostics
+
+Inspect [renderer.info](https://threejs.org/docs/pages/WebGLRenderer.html) in a
+repeatable worst-case scene:
+
+```ts
+function readRendererStats(renderer: THREE.WebGLRenderer) {
+  const { render, memory, programs } = renderer.info;
+
+  return {
+    calls: render.calls,
+    triangles: render.triangles,
+    lines: render.lines,
+    points: render.points,
+    geometries: memory.geometries,
+    textures: memory.textures,
+    programs: programs?.length ?? 0,
+  };
+}
+```
+
+For multi-pass manual rendering, `renderer.info` can auto-reset before each
+render. Set `renderer.info.autoReset = false`, reset once at the start of the
+measured frame, and call `renderer.info.reset()` after collecting the whole
+frame if aggregate numbers are required.
+
+Also record:
+
+- Canvas CSS size, drawing-buffer size, DPR, renderer, and backend.
+- Tone mapper, exposure, shadow type/maps/casters, and post pass count.
+- CPU frame time and GPU timing from browser profiling tools.
+- Active meshes, visible materials, lights, transparent objects, particles,
+  skinned meshes, morph targets, render targets, and local asset sizes.
+- Console shader/link errors and WebGPU validation errors.
+
+Use `await renderer.compileAsync(scene, camera)` after required local assets are
+ready when a measured first-use shader hitch warrants precompilation. Do not
+compile every speculative material variant.
+
+Test context loss deliberately in a diagnostic route, stop simulation while
+the context is unavailable, and verify resources recover or the game presents
+a clear restart path. Do not use `forceContextLoss()` as ordinary cleanup.
+
+## Rendering QA
+
+Before accepting a rendering change, prove:
+
+- Color textures and data textures use the correct color-space annotations.
+- Tone mapping and output conversion occur exactly once.
+- The hero, threats, rewards, and route remain readable with post disabled.
+- Camera near/far planes, FOV, aspect changes, and narrow/mobile framing work.
+- Shadow acne, peter-panning, clipping, map boundaries, and moving casters are
+  checked in active play.
+- Transparent effects do not reorder unpredictably or hide collision reads.
+- The measured worst case meets the target frame and memory budget.
+- Resize does not allocate new render targets every frame.
+- Repeated scene entry/exit returns renderer memory to its steady baseline.
+- The production preview loads every runtime resource locally with no outbound
+  requests, blank frames, console errors, or shader warnings.

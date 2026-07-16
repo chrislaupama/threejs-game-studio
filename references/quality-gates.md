@@ -1,5 +1,12 @@
 # Complete Game Quality Gates
 
+## Contents
+
+- First playable and technical baseline
+- Design, gameplay, content, and visuals
+- UI, input, audio, accessibility, and physics
+- QA, claim tiers, and release
+
 Use the matching sections before describing work as complete, polished,
 premium, showcase, or release-ready.
 
@@ -14,6 +21,27 @@ premium, showcase, or release-ready.
 - The first playable minute contains a meaningful decision and feedback event.
 - Camera, controls, HUD, and local audio/VFX communicate the next decision.
 - Build, browser, console/page errors, screenshot, and nonblank canvas pass.
+
+## Three.js Baseline And Lifecycle
+
+- The report records the installed package version, `THREE.REVISION`, renderer
+  class, actual backend, and whether the path is WebGL, WebGPU, or XR.
+- Every copied API was checked against the installed revision. WebGL
+  `EffectComposer`/GLSL recipes and WebGPU `RenderPipeline`/TSL recipes are not
+  mixed.
+- One owner creates and tears down the renderer, animation loop, r185 `Timer`,
+  active camera, resize observer/listener, loading manager, audio context, and
+  asset cache.
+- `renderer.setAnimationLoop(null)` stops rendering before disposal. Controls,
+  mixers, event listeners, workers, render targets, geometries, materials,
+  textures, skeletons, audio nodes, and the renderer are disposed by their
+  declared owner.
+- Canvas display size, drawing-buffer size, camera projection, post-processing
+  targets, picking coordinates, and DOM overlay metrics stay correct after
+  resize and orientation changes. DPR is capped and recorded.
+- A development remount/restart does not create a second loop, duplicate input
+  handler, stale physics body, repeated audio voice, or growing GPU resource
+  count.
 
 ## Game Design And Level
 
@@ -95,6 +123,8 @@ failures and run the fresh-eyes pass against the complete capture set.
 ## QA And Release
 
 - Build and production preview pass.
+- Installed Three.js revision, renderer/backend, color policy, DPR cap, and
+  lifecycle/disposal evidence are captured in the release report.
 - Correct URL/base path and every local asset path work in built output.
 - Main input, objective, pressure, progression, fail/retry, pause, and restart
   are exercised as applicable.

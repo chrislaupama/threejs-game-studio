@@ -29,10 +29,7 @@ export class Game {
   private readonly audio = new AudioSystem();
   private readonly hud = new Hud();
   private readonly cameraRig = new CameraRig(this.camera);
-  private readonly loop = new Loop(
-    (delta) => this.update(delta),
-    () => this.render(),
-  );
+  private readonly loop: Loop;
   private readonly tuning: DebugTuning = {
     speed: 5.8,
     dashMultiplier: 1.75,
@@ -54,6 +51,11 @@ export class Game {
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = createRenderer(canvas);
+    this.loop = new Loop(
+      this.renderer,
+      (delta) => this.update(delta),
+      () => this.render(),
+    );
     this.renderer.toneMappingExposure = this.tuning.exposure;
 
     this.input = new InputController(
@@ -81,7 +83,7 @@ export class Game {
   }
 
   dispose(): void {
-    this.loop.stop();
+    this.loop.dispose();
     this.input.dispose();
     this.audio.dispose();
     this.debugTools.dispose();
@@ -357,10 +359,15 @@ export class Game {
         speed: this.player.velocity.length(),
       },
       renderer: {
+        revision: THREE.REVISION,
+        backend: 'webgl',
         calls: info.render.calls,
         triangles: info.render.triangles,
         geometries: info.memory.geometries,
         textures: info.memory.textures,
+      },
+      camera: {
+        aspect: this.camera.aspect,
       },
       canvas: {
         clientWidth: this.canvas.clientWidth,

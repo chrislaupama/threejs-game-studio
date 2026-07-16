@@ -143,12 +143,18 @@ Any of these prevents a polished/premium/showcase claim:
 
 Run the canvas inspector (`npm run inspect:canvas` or
 `scripts/inspect-threejs-canvas.mjs`) on relevant viewports and cite its
-`metrics` and `renderBudget` blocks. These are smoke and budget signals, not
-proof of artistic quality; interpret them alongside the complete capture set:
+`metrics` and `renderBudget` blocks. Pixel metrics are smoke signals only. They
+can reward visual noise and penalize an intentionally sparse, high-quality art
+direction, so never convert a threshold directly into a score or automatic
+failure. Calibrate them against the packaged anchors and the game's own prior
+captures, then interpret them with the complete active capture set:
 
-- `colorEntropyBits` below ~3.0 or `dominantColorShare` above ~0.6 suggests a sparse, flat scene — supporting evidence against World/environment or Materials/textures scores above 2.
-- `edgeDensity` below ~0.04 suggests primitive-dominant or empty framing — supporting evidence against World/environment and Hero/player scores above 2.
-- `luminance.contrast` below ~60 suggests fog/darkness compression — supporting evidence against Lighting/render scores above 2.
+- Large entropy/dominant-color changes can reveal blank, flat, or unexpectedly
+  noisy output; inspect the image before drawing an art conclusion.
+- Large edge-density changes can reveal missing geometry, aliasing, excessive
+  particles, or texture noise; they do not measure authored detail.
+- Large contrast changes can reveal fog/darkness compression or a broken output
+  transform; a low-key palette may still be deliberate and readable.
 - `renderBudget` rows over the tier budget require a documented tradeoff in the
   technical-art budget (see `technical-art.md`).
 - Renderer diagnostics (calls, triangles, geometries, textures) back the Performance evidence category.

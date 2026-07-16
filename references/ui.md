@@ -4,7 +4,7 @@
 
 - UI principles, required states, and HUD composition
 - Menus, touch controls, and responsive constraints
-- Local UI art, state wiring, verification, and failures
+- Semantic DOM, accessibility, local art, state wiring, and verification
 
 Use this when designing HUDs, menus, overlays, pause/fail/win states, touch controls, typography, responsive layout, and UI/world cohesion.
 
@@ -31,6 +31,51 @@ Inventory states before designing:
 - Debug/tuning UI gated separately from player UI.
 
 Premium games should not have only one HUD state.
+
+## Semantic DOM Overlay
+
+Use HTML/CSS for most HUD and menus. It stays sharp at any DPR, supports text,
+focus, screen readers and safe areas, and avoids spending GPU texture memory on
+dynamic labels.
+
+```html
+<main id="game-shell">
+  <canvas id="game-canvas" aria-label="Game view"></canvas>
+  <section id="hud" aria-live="polite" aria-atomic="false">
+    <div class="objective">
+      <span id="objective-label">Crystals</span>
+      <output id="objective-value" aria-labelledby="objective-label">0 / 8</output>
+    </div>
+    <button id="pause-button" type="button" aria-label="Pause game">Ⅱ</button>
+  </section>
+  <section id="pause-dialog" role="dialog" aria-modal="true" hidden>
+    <h1>Paused</h1>
+    <button id="resume-button" type="button">Resume</button>
+    <button id="restart-button" type="button">Restart</button>
+  </section>
+</main>
+```
+
+Use `aria-live` only for sparse important updates. Do not announce a timer or
+score every frame. Move focus into an opened modal and restore it to the control
+that opened the modal on close. `hidden` elements must not remain keyboard
+focusable.
+
+```ts
+const dialog = document.querySelector<HTMLElement>('#pause-dialog')!;
+const pauseButton = document.querySelector<HTMLButtonElement>('#pause-button')!;
+const resumeButton = document.querySelector<HTMLButtonElement>('#resume-button')!;
+
+function renderPauseState(paused: boolean): void {
+  dialog.hidden = !paused;
+  pauseButton.setAttribute('aria-pressed', String(paused));
+  if (paused) resumeButton.focus();
+  else pauseButton.focus();
+}
+```
+
+The button dispatches a `pause` intent. The state machine decides whether the
+transition is legal; `renderPauseState` only reflects canonical state.
 
 ## HUD Composition
 
@@ -76,6 +121,45 @@ When mobile is in scope:
 - Separate adjacent controls enough to prevent accidental presses.
 - Use `touch-action` to prevent unwanted page scrolling only in control regions or the game surface.
 
+Use CSS safe-area variables and keep the canvas behind the overlay:
+
+```css
+#game-shell {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: #090b10;
+}
+
+#game-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+#hud {
+  position: absolute;
+  inset:
+    max(12px, env(safe-area-inset-top))
+    max(12px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom))
+    max(12px, env(safe-area-inset-left));
+  pointer-events: none;
+}
+
+#hud button,
+.touch-control {
+  pointer-events: auto;
+  min-width: 44px;
+  min-height: 44px;
+  touch-action: none;
+}
+```
+
+Do not put `pointer-events: none` on an ancestor of interactive descendants
+without explicitly restoring it. Test a real touch sequence including cancel
+and lost capture.
+
 ## Responsive Constraints
 
 - Define stable dimensions with CSS variables, `clamp`, grid tracks, fixed icon slots, and fixed-width numbers.
@@ -85,6 +169,9 @@ When mobile is in scope:
 - Test longest likely values: high score, long labels, multi-digit timers, localized-ish text if relevant.
 - No clipped text, overlapping controls, unreadably small labels, or layout shift from changing values.
 - Menus must remain reachable without offscreen controls.
+
+Separate UI scaling from renderer pixel ratio. CSS pixels define legibility and
+hit areas; renderer DPR defines canvas cost. Raising DPR must not shrink the HUD.
 
 ## Visual Style
 
@@ -115,6 +202,60 @@ diegetic menu prop. Ordinary HUD elements remain semantic HTML/CSS/SVG/Canvas.
 - UI events dispatch game intents; they should not mutate unrelated simulation internals directly.
 - UI should update on pause, restart, resize, mobile orientation, mute, fail/win, score, health, boost, combo, inventory, and accessibility settings.
 - Avoid stale values after restart.
+
+Render only when view-model values change rather than writing DOM strings every
+animation frame:
+
+```ts
+type HudModel = Readonly<{
+  score: number;
+  target: number;
+  health: number;
+  state: 'playing' | 'paused' | 'won' | 'lost';
+}>;
+
+const objectiveValue = document.querySelector<HTMLOutputElement>('#objective-value')!;
+const healthMeter = document.querySelector<HTMLMeterElement>('#health-meter')!;
+let previous: HudModel | undefined;
+
+function renderHud(next: HudModel): void {
+  if (!previous || next.score !== previous.score || next.target !== previous.target) {
+    objectiveValue.value = `${next.score} / ${next.target}`;
+  }
+  if (!previous || next.health !== previous.health) {
+    healthMeter.value = next.health;
+  }
+  if (!previous || next.state !== previous.state) {
+    document.body.dataset.gameState = next.state;
+  }
+  previous = next;
+}
+```
+
+Use a stable view model. Do not expose mutable entity objects to UI code.
+
+## Accessibility And Motion
+
+- Honor `prefers-reduced-motion` and provide an in-game setting when camera
+  shake, flashes, parallax or animated menus materially affect comfort.
+- Limit rapid full-screen luminance changes. Provide a reduced-flash path for
+  impact effects.
+- Keep status meaning in shape/icon/text as well as color.
+- Provide visible keyboard focus and logical tab order for menus.
+- Offer remapping when control complexity warrants it; at minimum document all
+  controls and avoid hard-coding a primary action to one inaccessible input.
+- Do not trap pointer lock or fullscreen. Escape must restore a usable menu and
+  focus state.
+- Keep essential state in DOM text or an equivalent accessible channel when the
+  canvas visual alone cannot communicate it.
+
+```ts
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+const motionScale = () => reducedMotion.matches ? 0 : 1;
+```
+
+Listen for changes only if the game supports live OS preference updates, and
+remove that listener during disposal.
 
 ## Verification
 

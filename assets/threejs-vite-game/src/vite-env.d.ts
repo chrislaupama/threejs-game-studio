@@ -14,10 +14,15 @@ interface ThreeGameDiagnostics {
     speed: number;
   };
   renderer: {
+    revision: string;
+    backend: 'webgl' | 'webgpu';
     calls: number;
     triangles: number;
     geometries: number;
     textures: number;
+  };
+  camera: {
+    aspect: number;
   };
   canvas: {
     clientWidth: number;

@@ -123,31 +123,39 @@ A brief freeze on heavy contact sells weight. Scale the gameplay delta, never th
 // Fields on Game:
 private timeScale = 1;
 private hitstopRemaining = 0;
+private simulationTime = 0;
+private presentationTime = 0;
 
 hitstop(durationMs: number, scale = 0.05): void {
   this.hitstopRemaining = Math.max(this.hitstopRemaining, durationMs / 1000);
   this.timeScale = scale;
 }
 
-private update(delta: number, elapsed: number): void {
+private update(realDelta: number): void {
+  this.presentationTime += realDelta;
   if (this.hitstopRemaining > 0) {
-    this.hitstopRemaining -= delta; // decay in REAL time
+    this.hitstopRemaining -= realDelta;
     if (this.hitstopRemaining <= 0) this.timeScale = 1;
   }
-  const gameplayDelta = delta * this.timeScale;
+  const simulationDelta = realDelta * this.timeScale;
+  this.simulationTime += simulationDelta;
 
-  // Gameplay reads the scaled delta so the world crawls...
-  this.player.update(gameplayDelta, elapsed, this.input, this.tuning, ARENA);
-  for (const pickup of this.pickups) pickup.update(gameplayDelta, elapsed);
+  // Gameplay reads simulation time, so both motion and time-based rules crawl.
+  this.player.update(simulationDelta, this.simulationTime, this.input, this.tuning, ARENA);
+  for (const pickup of this.pickups) pickup.update(simulationDelta, this.simulationTime);
 
-  // ...but camera, shake, tweens, and HUD read the REAL delta so feedback stays live.
-  this.cameraRig.update(delta, this.player.group.position, this.tuning.cameraLag);
-  this.shakeRig.update(delta, this.camera);
-  this.tweens.update(delta);
+  // Feedback reads real/presentation time so the frozen impact remains alive.
+  this.cameraRig.update(realDelta, this.player.group.position, this.tuning.cameraLag);
+  this.shakeRig.update(realDelta, this.camera);
+  this.tweens.update(realDelta);
 }
 ```
 
-Recommended: 60-90ms at `0.05` scale on heavy hits only. Never call `loop.stop()` or skip `requestAnimationFrame` to freeze — the frame must keep drawing so the frozen moment is visible. Only the gameplay delta is scaled.
+Recommended: 60-90ms at `0.05` scale on heavy hits only. Never stop
+`renderer.setAnimationLoop()` to freeze—the frame must keep drawing so the
+impact remains visible. Keep real, simulation, and presentation clocks named
+separately so timers and procedural animation do not accidentally ignore
+hitstop.
 
 ## Squash-and-Stretch
 
@@ -261,6 +269,8 @@ export function rumble(durationMs: number, strong = 0.6, weak = 0.3): void {
       duration: durationMs,
       strongMagnitude: strong,
       weakMagnitude: weak,
+    }).catch(() => {
+      // Unsupported or disconnected hardware must never break gameplay.
     });
   }
 }

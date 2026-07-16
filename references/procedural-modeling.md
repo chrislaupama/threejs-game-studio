@@ -49,6 +49,156 @@ Use for runners, racers, hovercraft, spaceships, drones, or arcade vehicles.
 
 Reject if the hero is mostly a box with two cylinders and a glow.
 
+### Worked hero factory: readable hovercraft
+
+This compact factory demonstrates the production contract: a custom silhouette,
+named functional parts, material roles, VFX sockets, a separate gameplay
+collider, and one disposal owner. Treat dimensions as metres and declare the
+game's forward axis before adapting it.
+
+```ts
+import * as THREE from 'three'
+
+type HovercraftAsset = {
+  root: THREE.Group
+  collider: { center: THREE.Vector3; halfExtents: THREE.Vector3 }
+  sockets: { leftTrail: THREE.Object3D; rightTrail: THREE.Object3D }
+  setBoosting(active: boolean): void
+  dispose(): void
+}
+
+function taperedHullGeometry(): THREE.BufferGeometry {
+  // Local forward is -Z. The narrow front gives a readable heading.
+  const positions = new Float32Array([
+    -0.45, -0.18, -1.45,   0.45, -0.18, -1.45,
+    -0.78, -0.22,  0.70,   0.78, -0.22,  0.70,
+    -0.30,  0.24, -1.20,   0.30,  0.24, -1.20,
+    -0.62,  0.32,  0.55,   0.62,  0.32,  0.55,
+  ])
+  const indices = [
+    0, 2, 1, 1, 2, 3,       // underside
+    4, 5, 6, 5, 7, 6,       // upper deck
+    0, 1, 4, 1, 5, 4,       // nose
+    2, 6, 3, 3, 6, 7,       // rear
+    0, 4, 2, 2, 4, 6,       // left side
+    1, 3, 5, 3, 7, 5,       // right side
+  ]
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  geometry.setIndex(indices)
+  geometry.computeVertexNormals()
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+  return geometry
+}
+
+export function createHovercraft(): HovercraftAsset {
+  const root = new THREE.Group()
+  root.name = 'hovercraft'
+
+  const body = new THREE.MeshStandardMaterial({
+    color: 0x2d4b73,
+    metalness: 0.45,
+    roughness: 0.32,
+  })
+  const trim = new THREE.MeshStandardMaterial({
+    color: 0xe9eef5,
+    metalness: 0.7,
+    roughness: 0.24,
+  })
+  const glass = new THREE.MeshPhysicalMaterial({
+    color: 0x75d6ff,
+    roughness: 0.12,
+    metalness: 0,
+    transmission: 0.35,
+    thickness: 0.08,
+  })
+  const engine = new THREE.MeshStandardMaterial({
+    color: 0x17202b,
+    emissive: 0x27a8ff,
+    emissiveIntensity: 0.8,
+    metalness: 0.65,
+    roughness: 0.28,
+  })
+
+  const hull = new THREE.Mesh(taperedHullGeometry(), body)
+  hull.name = 'mainHull'
+  hull.castShadow = true
+  hull.receiveShadow = true
+  root.add(hull)
+
+  const canopy = new THREE.Mesh(
+    new THREE.SphereGeometry(0.48, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.52),
+    glass,
+  )
+  canopy.name = 'cockpitGlass'
+  canopy.scale.set(0.9, 0.62, 1.35)
+  canopy.position.set(0, 0.27, -0.34)
+  root.add(canopy)
+
+  const engineGeometry = new THREE.CylinderGeometry(0.22, 0.28, 0.72, 16)
+  engineGeometry.rotateX(Math.PI / 2)
+  const leftEngine = new THREE.Mesh(engineGeometry, engine)
+  leftEngine.name = 'leftEngine'
+  leftEngine.position.set(-0.63, 0.02, 0.52)
+  const rightEngine = leftEngine.clone()
+  rightEngine.name = 'rightEngine'
+  rightEngine.position.x *= -1
+  root.add(leftEngine, rightEngine)
+
+  const finGeometry = new THREE.BoxGeometry(0.08, 0.30, 0.72)
+  for (const side of [-1, 1] as const) {
+    const fin = new THREE.Mesh(finGeometry, trim)
+    fin.name = side < 0 ? 'leftFin' : 'rightFin'
+    fin.position.set(side * 0.78, 0.06, 0.26)
+    fin.rotation.z = side * -0.18
+    root.add(fin)
+  }
+
+  const leftTrail = new THREE.Object3D()
+  leftTrail.name = 'leftTrailSocket'
+  leftTrail.position.set(-0.63, 0.02, 0.94)
+  const rightTrail = leftTrail.clone()
+  rightTrail.name = 'rightTrailSocket'
+  rightTrail.position.x *= -1
+  root.add(leftTrail, rightTrail)
+
+  // Gameplay collision stays stable even when visual children animate.
+  const collider = {
+    center: new THREE.Vector3(0, 0.02, -0.18),
+    halfExtents: new THREE.Vector3(0.72, 0.28, 1.02),
+  }
+
+  return {
+    root,
+    collider,
+    sockets: { leftTrail, rightTrail },
+    setBoosting(active) {
+      engine.emissiveIntensity = active ? 3.2 : 0.8
+    },
+    dispose() {
+      const geometries = new Set<THREE.BufferGeometry>()
+      const materials = new Set<THREE.Material>()
+      root.traverse((object) => {
+        if (!(object instanceof THREE.Mesh)) return
+        geometries.add(object.geometry)
+        const list = Array.isArray(object.material)
+          ? object.material
+          : [object.material]
+        for (const material of list) materials.add(material)
+      })
+      for (const geometry of geometries) geometry.dispose()
+      for (const material of materials) material.dispose()
+      root.removeFromParent()
+    },
+  }
+}
+```
+
+If factories share a global geometry or material library, the library—not each
+asset instance—owns disposal. Add reference counting only when real dynamic
+loading makes simple scene-level ownership insufficient.
+
 ## Hero Character Recipe
 
 Use for arena fighters, brawlers, platformers, or stylized third-person games.

@@ -5,6 +5,7 @@
 - Ownership and audio event matrix
 - Bus graph, gesture unlock, and procedural cues
 - Deterministic variation, spatial audio, and mixing
+- Local-buffer playback, voice ownership, and Three.js positional audio
 - Pause/restart/disposal and verification
 
 Use this reference when implementing SFX, UI sounds, ambience, music playback,
@@ -72,6 +73,23 @@ Create/resume the context from the first relevant `pointerdown` or `keydown`.
 Make unlock idempotent. If unlock or decode fails, keep the game playable and
 surface a useful local error state rather than retrying against a remote source.
 
+```ts
+async function unlockAudio(context: AudioContext): Promise<boolean> {
+  if (context.state === 'running') return true;
+  try {
+    await context.resume();
+    return context.state === 'running';
+  } catch (error) {
+    console.warn('Audio could not be unlocked.', error);
+    return false;
+  }
+}
+```
+
+Register the gesture handler once, remove it after success, and keep a visible
+mute/sound setting. Never start a game timer only after an audio promise
+resolves; audio failure must degrade silently or through a non-blocking status.
+
 ## Procedural SFX
 
 Build compact effects from oscillators, noise buffers, filters, envelopes, and
@@ -101,6 +119,169 @@ direction materially helps play. Update listener and source positions from the
 same authoritative transforms as rendering. Do not spatialize UI or global
 status cues.
 
+Three.js provides one listener, non-positional `Audio`, `PositionalAudio`, and
+`AudioLoader`. Attach the listener to the active camera and an emitter to its
+world object:
+
+```ts
+import * as THREE from 'three';
+
+const listener = new THREE.AudioListener();
+camera.add(listener);
+
+const loader = new THREE.AudioLoader(loadingManager);
+const engineBuffer = await loader.loadAsync('/audio/engine-loop.ogg');
+
+const engine = new THREE.PositionalAudio(listener);
+engine.setBuffer(engineBuffer);
+engine.setLoop(true);
+engine.setVolume(0.35);
+engine.setDistanceModel('inverse');
+engine.setRefDistance(3);
+engine.setMaxDistance(45);
+engine.setRolloffFactor(1.2);
+vehicle.add(engine);
+
+// Call after a gesture has resumed listener.context.
+engine.play();
+```
+
+Use one `AudioListener` for the active listening view. When cameras switch,
+move the listener or reparent it deliberately; do not leave one listener on
+each camera. Configure directional emitters only when orientation is meaningful:
+
+```ts
+engine.setDirectionalCone(70, 150, 0.15);
+```
+
+The angles are degrees. Visualize or audition the cone while tuning. Keep UI,
+music and narrator/state cues non-positional.
+
+Official API: [Audio](https://threejs.org/docs/pages/Audio.html),
+[AudioListener](https://threejs.org/docs/pages/AudioListener.html),
+[PositionalAudio](https://threejs.org/docs/pages/PositionalAudio.html), and
+[AudioLoader](https://threejs.org/docs/pages/AudioLoader.html).
+
+## Local Buffer Cache
+
+Decode a local file once and share its `AudioBuffer`. Keep loading in the asset
+system, not inside an impact callback:
+
+```ts
+class AudioBufferCache {
+  private readonly loader: THREE.AudioLoader;
+  private readonly buffers = new Map<string, Promise<AudioBuffer>>();
+
+  constructor(manager: THREE.LoadingManager) {
+    this.loader = new THREE.AudioLoader(manager);
+  }
+
+  load(url: string): Promise<AudioBuffer> {
+    const existing = this.buffers.get(url);
+    if (existing) return existing;
+    const request = this.loader.loadAsync(url).catch((error) => {
+      this.buffers.delete(url); // allow an explicit retry
+      throw error;
+    });
+    this.buffers.set(url, request);
+    return request;
+  }
+
+  clear(): void {
+    this.buffers.clear();
+  }
+}
+```
+
+Audio buffers are CPU memory. Clearing references allows garbage collection;
+playing sources still need explicit stop/disconnect ownership. Show loading or
+failure when a cue is required for the experience, but keep gameplay usable.
+
+## Bounded Voice Playback
+
+For short non-positional SFX, create a source per playback, but cap active
+voices and disconnect each graph when it ends:
+
+```ts
+type Voice = {
+  source: AudioBufferSourceNode;
+  gain: GainNode;
+  startedAt: number;
+};
+
+class VoicePool {
+  private readonly active: Voice[] = [];
+
+  constructor(
+    private readonly context: AudioContext,
+    private readonly output: AudioNode,
+    private readonly maximum = 16,
+  ) {}
+
+  play(buffer: AudioBuffer, volume: number, playbackRate: number): void {
+    if (this.context.state !== 'running') return;
+    while (this.active.length >= this.maximum) this.stop(this.active[0]);
+
+    const source = this.context.createBufferSource();
+    const gain = this.context.createGain();
+    source.buffer = buffer;
+    source.playbackRate.value = playbackRate;
+    gain.gain.value = volume;
+    source.connect(gain).connect(this.output);
+
+    const voice = { source, gain, startedAt: this.context.currentTime };
+    this.active.push(voice);
+    source.addEventListener('ended', () => this.release(voice), { once: true });
+    source.start();
+  }
+
+  dispose(): void {
+    for (const voice of [...this.active]) this.stop(voice);
+  }
+
+  private stop(voice: Voice): void {
+    try { voice.source.stop(); } catch { /* already stopped */ }
+    this.release(voice);
+  }
+
+  private release(voice: Voice): void {
+    const index = this.active.indexOf(voice);
+    if (index >= 0) this.active.splice(index, 1);
+    voice.source.disconnect();
+    voice.gain.disconnect();
+  }
+}
+```
+
+Choose stealing by category and priority in a production game: a critical fail
+cue should replace an old footstep, not the reverse. Add per-event cooldowns so
+collision jitter does not create a wall of duplicate sounds.
+
+## Pause, Restart And Disposal
+
+Define the distinction:
+
+- **mute:** keep timelines running, set master gain toward zero
+- **pause:** suspend or pause game-owned sources and resume consistently
+- **restart:** stop transient/looping run voices, reset music/ambience by design
+- **scene exit:** detach positional emitters and release scene-owned sources
+- **application dispose:** stop all voices, disconnect buses/listeners, remove
+  gesture/visibility handlers, clear caches, and close the owned context
+
+Use short gain ramps to prevent clicks:
+
+```ts
+function rampGain(node: GainNode, value: number, context: AudioContext): void {
+  const now = context.currentTime;
+  node.gain.cancelScheduledValues(now);
+  node.gain.setValueAtTime(node.gain.value, now);
+  node.gain.linearRampToValueAtTime(value, now + 0.02);
+}
+```
+
+Do not close a shared audio context when only one scene exits. Ownership must be
+explicit, especially under hot reload.
+
 ## Mixing Rules
 
 - Reserve headroom; several simultaneous voices must not clip.
@@ -121,3 +302,7 @@ status cues.
 - Repeated cues vary without becoming inconsistent.
 - Local files resolve under production `base` paths and decode visibly on error.
 - No audio request targets a remote origin.
+- One listener follows the active camera; positional falloff and cones are
+  audible from intended gameplay distances.
+- Voice caps, collision spam, repeated restart and scene re-entry do not leak or
+  duplicate sources.

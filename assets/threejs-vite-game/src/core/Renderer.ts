@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 
+const currentSize = new THREE.Vector2();
+
 export function createRenderer(canvas: HTMLCanvasElement): THREE.WebGLRenderer {
   const renderer = new THREE.WebGLRenderer({
     canvas,
@@ -24,9 +26,11 @@ export function resizeRenderer(
   const width = Math.max(1, Math.floor(canvas.clientWidth));
   const height = Math.max(1, Math.floor(canvas.clientHeight));
   const dpr = Math.min(window.devicePixelRatio || 1, maxDpr);
-  const bufferWidth = Math.floor(width * dpr);
-  const bufferHeight = Math.floor(height * dpr);
-  const needsResize = canvas.width !== bufferWidth || canvas.height !== bufferHeight;
+  renderer.getSize(currentSize);
+  const needsResize =
+    currentSize.x !== width ||
+    currentSize.y !== height ||
+    renderer.getPixelRatio() !== dpr;
 
   if (needsResize) {
     renderer.setPixelRatio(dpr);
