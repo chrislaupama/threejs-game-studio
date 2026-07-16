@@ -1,0 +1,4 @@
+interface:
+  display_name: "Three.js Game Studio"
+  short_description: "Build, debug, optimize, and verify local Three.js games"
+  default_prompt: "Use $threejs-game-studio for this local-first Three.js game task. Choose broad mode for a new or major game and focused mode for an existing-project fix; preserve the game's design and dependencies unless the request requires changing them."

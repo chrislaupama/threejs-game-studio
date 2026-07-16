@@ -1,0 +1,274 @@
+:root {
+  color: #f6f1df;
+  background: #111312;
+  font-family:
+    Avenir Next,
+    Avenir,
+    "Segoe UI",
+    sans-serif;
+  font-synthesis: none;
+  text-rendering: geometricPrecision;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  min-width: 320px;
+}
+
+#app {
+  position: relative;
+  background:
+    radial-gradient(circle at 18% 18%, rgba(245, 186, 73, 0.16), transparent 26rem),
+    radial-gradient(circle at 82% 72%, rgba(72, 186, 167, 0.14), transparent 24rem),
+    #111312;
+}
+
+#game-canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  outline: none;
+  touch-action: none;
+}
+
+#hud {
+  position: absolute;
+  top: max(16px, env(safe-area-inset-top));
+  left: max(16px, env(safe-area-inset-left));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  pointer-events: none;
+  color: #f6f1df;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.hud-metric {
+  min-width: 92px;
+  padding: 8px 10px;
+  border: 1px solid rgba(246, 241, 223, 0.24);
+  background: rgba(17, 19, 18, 0.72);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(10px);
+}
+
+.hud-metric > span {
+  display: block;
+  color: rgba(246, 241, 223, 0.68);
+  font-size: 0.68rem;
+}
+
+.hud-metric > strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 1.08rem;
+}
+
+#status-line {
+  min-width: 132px;
+  padding: 9px 11px;
+  border-left: 3px solid #f5ba49;
+  background: rgba(17, 19, 18, 0.6);
+  font-weight: 700;
+  font-size: 0.78rem;
+}
+
+#system-controls {
+  position: absolute;
+  top: max(16px, env(safe-area-inset-top));
+  right: max(16px, env(safe-area-inset-right));
+  display: flex;
+  gap: 8px;
+}
+
+#system-controls button {
+  min-width: 78px;
+  padding: 10px 14px;
+  border: 1px solid rgba(246, 241, 223, 0.3);
+  color: #f6f1df;
+  background: rgba(17, 19, 18, 0.76);
+  font: inherit;
+  font-weight: 800;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+#system-controls button:focus-visible,
+#retry-button:focus-visible,
+#dash-button:focus-visible,
+#game-canvas:focus-visible {
+  outline: 3px solid #f5ba49;
+  outline-offset: 3px;
+}
+
+#state-panel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(420px, calc(100vw - 32px));
+  padding: 26px;
+  border: 1px solid rgba(246, 241, 223, 0.28);
+  background: rgba(17, 19, 18, 0.9);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.46);
+  backdrop-filter: blur(16px);
+  transform: translate(-50%, -50%);
+  text-align: center;
+}
+
+#state-panel[hidden] {
+  display: none;
+}
+
+#state-kicker {
+  margin: 0 0 8px;
+  color: #48baa7;
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+#state-title {
+  margin: 0;
+  font-size: clamp(1.65rem, 5vw, 2.6rem);
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+#state-copy {
+  margin: 14px auto 20px;
+  max-width: 34ch;
+  color: rgba(246, 241, 223, 0.74);
+  line-height: 1.5;
+}
+
+#retry-button {
+  padding: 11px 18px;
+  border: 0;
+  color: #111312;
+  background: #f5ba49;
+  font: inherit;
+  font-weight: 900;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.debug-panel {
+  position: absolute;
+  z-index: 4;
+  right: 16px;
+  bottom: 16px;
+  display: grid;
+  width: min(280px, calc(100vw - 32px));
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(246, 241, 223, 0.24);
+  color: #f6f1df;
+  background: rgba(17, 19, 18, 0.92);
+  font-size: 0.72rem;
+}
+
+.debug-panel label {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+}
+
+.debug-panel input {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
+#touch-controls {
+  position: absolute;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  left: max(18px, env(safe-area-inset-left));
+  display: none;
+  justify-content: space-between;
+  align-items: flex-end;
+  pointer-events: none;
+}
+
+#touch-stick {
+  position: relative;
+  width: clamp(96px, 24vw, 132px);
+  aspect-ratio: 1;
+  border: 1px solid rgba(246, 241, 223, 0.28);
+  border-radius: 50%;
+  background: rgba(17, 19, 18, 0.52);
+  pointer-events: auto;
+  touch-action: none;
+}
+
+#touch-knob {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 42%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: #f5ba49;
+  box-shadow: 0 0 24px rgba(245, 186, 73, 0.44);
+  transform: translate(-50%, -50%);
+}
+
+#dash-button {
+  width: clamp(74px, 18vw, 96px);
+  aspect-ratio: 1;
+  border: 1px solid rgba(246, 241, 223, 0.3);
+  border-radius: 50%;
+  color: #111312;
+  background: #48baa7;
+  font-weight: 800;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+@media (pointer: coarse), (max-width: 760px) {
+  #hud {
+    right: max(12px, env(safe-area-inset-right));
+    left: max(12px, env(safe-area-inset-left));
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .hud-metric {
+    min-width: 78px;
+    padding: 7px 8px;
+  }
+
+  #status-line {
+    min-width: min(148px, 48vw);
+    font-size: 0.72rem;
+  }
+
+  #touch-controls {
+    display: flex;
+  }
+
+  #system-controls {
+    top: auto;
+    right: max(12px, env(safe-area-inset-right));
+    bottom: calc(max(18px, env(safe-area-inset-bottom)) + 112px);
+  }
+
+  #system-controls button {
+    min-width: 68px;
+    padding: 9px 10px;
+    font-size: 0.72rem;
+  }
+}

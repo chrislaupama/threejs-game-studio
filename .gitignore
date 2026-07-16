@@ -1,0 +1,9 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+node_modules/
+dist/
+test-results/
+playwright-report/
+*.zip
