@@ -71,6 +71,11 @@ ALLOWED_NAMESPACE_URLS = {
     "http://www.w3.org/2000/svg",
     "http://www.w3.org/2000/xmlns/",
 }
+ALLOWED_DOCUMENTATION_URLS = {
+    Path("README.md"): {
+        "https://github.com/chrislaupama/threejs-game-studio",
+    },
+}
 
 NETWORK_CLIENT = re.compile(
     r"(?im)^\s*(?:(?:from|import)\s+(?:requests|httpx|aiohttp|urllib\.request)\b|"
@@ -132,7 +137,11 @@ def audit_file(path: Path, root: Path) -> list[Finding]:
 
     for match in REMOTE_URL.finditer(text):
         value = match.group(0).rstrip(".,;")
-        if value in ALLOWED_NAMESPACE_URLS or ALLOWED_URL.match(value):
+        if (
+            value in ALLOWED_NAMESPACE_URLS
+            or value in ALLOWED_DOCUMENTATION_URLS.get(relative, set())
+            or ALLOWED_URL.match(value)
+        ):
             continue
         findings.append(
             Finding(relative, line_for(text, match.start()), "non-local URL", value[:180])
@@ -170,7 +179,8 @@ def main() -> int:
 
     print(
         "Skill local-only audit passed: no bundled provider helpers, credentials, "
-        "MCP invocations, network clients, or non-local URLs found outside legal/fixture files."
+        "MCP invocations, network clients, or non-local URLs found outside "
+        "legal/fixture files and the documented repository install URL."
     )
     return 0
 
