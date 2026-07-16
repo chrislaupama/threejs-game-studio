@@ -45,6 +45,27 @@ class AuditSkillLocalOnlyTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("non-local URL", result.stdout)
 
+    def test_accepts_documented_repository_install_url_only_in_readme(self) -> None:
+        result = self.run_audit(
+            {
+                "README.md": (
+                    "npx skills add "
+                    "https://github.com/chrislaupama/threejs-game-studio"
+                ),
+                "SKILL.md": "Local only.",
+            }
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        result = self.run_audit(
+            {
+                "README.md": "Install from https://example.com/other-skill",
+                "SKILL.md": "Local only.",
+            }
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("non-local URL", result.stdout)
+
     def test_rejects_credentials_and_mcp_invocation(self) -> None:
         result = self.run_audit(
             {"SKILL.md": "Read GEMINI_API_KEY then call mcp__assets__generate."}

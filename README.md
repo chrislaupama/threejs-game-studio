@@ -35,8 +35,14 @@ starter project live in [`assets/`](assets/).
 
 ## Install as a Codex skill
 
-Clone or copy the repository into your Codex skills directory with `SKILL.md`
-at its root. From a local checkout:
+Install directly with the Skills CLI:
+
+```bash
+npx skills add https://github.com/chrislaupama/threejs-game-studio
+```
+
+Alternatively, copy a local checkout into your Codex skills directory with
+`SKILL.md` at its root:
 
 ```bash
 cp -R /path/to/threejs-game-studio ~/.codex/skills/threejs-game-studio
