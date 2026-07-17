@@ -7,7 +7,7 @@
 - Level/encounter planning and genre patterns
 - Difficulty, pacing, rejection tests, and reporting
 
-Use this reference before broad new-game creation, major mechanic changes, progression tuning, level/arena/track/wave design, combat encounters, or any claim that gameplay is premium, polished, complete, or less generic.
+Use this reference before broad new-game creation, major mechanic changes, progression tuning, level/arena/track/wave design, combat encounters, or any claim that gameplay is premium, polished, complete, or less generic. For first- or third-person action, pair it with **First-Person Or Third-Person Action** in `genre-playbooks.md`; for a third-person camera also load **Third-Person Action Rig Contract** in `interaction.md`.
 
 This is not a long design document. It is a compact player-facing contract that turns an idea into implementable rules, spaces, pacing, and tuning checks.
 
@@ -78,7 +78,8 @@ Greybox first: use simple shapes to prove scale, route, timing, line-of-sight, c
 ## Genre Patterns
 
 Use these as design prompts. For a complete or polished runner, racer,
-dogfight, tower-defense, cue-sport, mini-golf, boss-arena, or puzzle game, also
+dogfight, tower-defense, cue-sport, mini-golf, boss-arena, puzzle, platformer,
+or first/third-person action game, also
 read `genre-playbooks.md` and fill its implementation and verification contract.
 The playbook is a minimum completeness model, not permission to force every
 game into the same content counts.
@@ -124,6 +125,20 @@ game into the same content counts.
 - Define boss phases, telegraphs, recovery windows, player punish windows, arena hazards, and camera lock behavior.
 - Every attack needs a readable tell, avoid/defend option, impact feedback, and cooldown.
 - Phases should add combinations or arena pressure, not just more health.
+
+### First-Person / Third-Person Action
+
+- Declare a default camera/aim mode and every supported transition. A game may
+  intentionally combine free third-person traversal, over-shoulder aim, and
+  lock-on combat; each mode still needs one pose/input owner and explicit entry,
+  exit, target-loss, and obstruction behavior.
+- Design weapons, melee volumes, cover, sight lines, encounter ranges, and
+  telegraphs against the real camera rather than a debug view.
+- For third-person aim, specify how the camera reticle ray, muzzle origin, near
+  cover, shoulder swaps, camera collision, and off-screen threats agree.
+- Route the implementation through **First-Person Or Third-Person Action** in
+  `genre-playbooks.md`, **Third-Person Action Rig Contract** in
+  `interaction.md`, and `ai-navigation.md` when enemies perceive or navigate.
 
 ### Puzzle / Physics Game
 

@@ -35,8 +35,8 @@ preserving a real beginning, escalation, ending, and replay/retry flow.
   performance ledgers. Load the owning tech ref + `quickref.md` +
   `qa-release.md` per `load-budgets.md`. Reproduce → fix → proportionate QA.
 - **Broad / complete / premium / release:** keep the fact/decision, phase,
-  content, and verification ledgers below. Load refs from `load-budgets.md`
-  before opening every manual.
+  content, and verification ledgers below. Select references and named sections
+  from `load-budgets.md`; never open every manual by default.
 
 ## Coordinator Records
 
@@ -147,7 +147,7 @@ framework on a novice.
 
 ## Phase 0: Discovery And Version Truth
 
-Read `official-docs.md` and inspect:
+Use the Phase 0 route in `load-budgets.md`, then inspect:
 
 - package manager, scripts, lockfile, installed `three` and type versions
 - framework, entrypoint, renderer, camera, loop, state and resize owners
@@ -171,7 +171,8 @@ highest-risk path, and relevant references selected.
 
 ## Phase 1: Design And Definition Of Complete
 
-Read `game-design.md` and the applicable section of `genre-playbooks.md`.
+Use the Phase 1 route in `load-budgets.md`: read the named design sections and
+one applicable section of `genre-playbooks.md`.
 Define:
 
 - player promise and target feeling
@@ -194,8 +195,15 @@ content target, difficulty plan and completion definition.
 
 ## Phase 2: Architecture And Foundation
 
-Read `fundamentals.md`, `gameplay-architecture.md`, `spatial-contracts.md`, and
-the renderer-specific sections of `rendering.md` and `shaders.md`.
+Use the Phase 2 route in `load-budgets.md`. For greenfield foundation work,
+read the named sections of `fundamentals.md` and `gameplay-architecture.md`.
+Add `spatial-contracts.md` only when its axes, constrained-motion, navigation,
+or multi-actor trigger applies. Read only **Renderer Decision** and **Resize And
+Output Ownership** from `rendering.md` when renderer setup changes.
+
+Record the renderer family and shader-language boundary from the version gate,
+but do not load `shaders.md` or design a custom shader stack before the first
+playable has browser smoke evidence. A focused shader repair is the exception.
 
 Establish one owner for renderer, active camera, animation loop, timer,
 simulation, game state, input actions, resize, loading manager/cache, audio
@@ -211,7 +219,11 @@ Choose and document:
 - action-based input map with per-device source tracking
 - camera mode and camera collision/occlusion approach
 - collision proxies, layer/mask model and world-query contract
+- AI/navigation representation and scheduling when actors need more than direct
+  steering; load `ai-navigation.md` only for that trigger
 - local asset directories, cache rules, fallback/loading/error states
+- save schema/content compatibility and chunk/worker ownership when persistence
+  or streaming is in scope; load `production-runtime.md` only for that trigger
 - material/color/environment policy and quality tiers
 - per-subsystem disposal responsibilities
 
@@ -243,9 +255,13 @@ progresses, pressure occurs, reward changes state, and fail/retry completes.
 
 ## Phase 4: Content, World And Asset Integration
 
-Read `geometry.md`, `materials-textures.md`, `loaders-animation.md`,
-`local-assets.md`, `procedural-modeling.md`, and `visual-architecture.md` as
-needed.
+Use the Phase 4 route and content signals in `load-budgets.md`. Open only the
+owning section: `procedural-modeling.md` for authored procedural families,
+`geometry.md` for merge/instance/batch/LOD decisions,
+`materials-textures.md` for file-backed surface work, `local-assets.md` for
+intake/provenance/normalization, or `loaders-animation.md` for loading,
+compression, clips, mixers, and animation state. Add `visual-architecture.md`
+when defining the cross-content art system. Do not open all of them by default.
 
 Build a small authored kit:
 
@@ -267,8 +283,12 @@ the active frame; import/provenance/bounds/clip/texture diagnostics.
 
 ## Phase 5: Visual Systems
 
-Read `rendering.md`, `lighting-shadows.md`, `shaders.md`, and
-`technical-art.md`. Improve in this order:
+Use the Phase 5 route in `load-budgets.md`. Read only the section owned by the
+active visual decision: composition/render pipeline in `rendering.md`,
+light/shadow work in `lighting-shadows.md`, event effects in `vfx.md`, or
+measured budgets/scaling in `technical-art.md`. Load `shaders.md` only after the
+playable smoke gate and only for a renderer-specific custom shader or post need.
+Improve in this order:
 
 1. camera framing, screen occupancy and silhouette
 2. decision-space readability and near/mid/far depth
@@ -288,7 +308,9 @@ diagnostics, target-versus-actual budget, dense-state check and mobile tradeoff.
 
 ## Phase 6: Feel, UI, Audio And Accessibility
 
-Read `game-feel.md`, `ui.md`, `audio.md`, and `interaction.md`.
+Use the Phase 6 route in `load-budgets.md`. Start with the single owning
+reference—`game-feel.md`, `ui.md`, `audio.md`, or `interaction.md`—and add a
+second only for an explicit cross-system event.
 
 - Tune input response, acceleration/deceleration, turn/aim and recovery first.
 - Map semantic events to proportional animation, VFX, camera, HUD, audio and
@@ -306,9 +328,12 @@ duplicated game rules in presentation code.
 
 ## Phase 7: Performance, Reliability And Memory
 
-Read `debugging-performance.md` and `technical-art.md`. Reproduce and measure
-before editing. Record a named worst-case scenario, viewport/DPR, renderer/GPU,
-quality tier, frame-time distribution, renderer counts and memory proxies.
+Use the Phase 7 route in `load-budgets.md`. Start with **Performance Profiling
+Order** and the measured owner's section in `debugging-performance.md`; add
+`technical-art.md` only for draw, material, shader, LOD, batching, or adaptive
+quality work. Reproduce and measure before editing. Record a named worst-case
+scenario, viewport/DPR, renderer/GPU, quality tier, frame-time distribution,
+renderer counts and memory proxies.
 
 Optimize one owner at a time:
 
@@ -319,6 +344,12 @@ Optimize one owner at a time:
 - textures: dimensions, formats, mipmaps, local KTX2, duplicate ownership
 - lifecycle: stale listeners, controls, mixers, workers, render targets, audio
 
+When the measured owner is pathfinding/crowd scheduling, use
+`ai-navigation.md`. When it is chunk residency, worker result application, save
+I/O, or local diagnostic buffering, use `production-runtime.md`. Any remote
+telemetry, cloud persistence, or network authority also triggers
+`networking-boundary.md` and requires approval.
+
 Re-measure the identical scenario. Test resize, visibility changes, pause,
 restart, repeated enter/exit and failed asset loads. A higher FPS that breaks
 readability, fairness or disposal does not pass.
@@ -328,8 +359,10 @@ quality, memory/re-entry check and known device limits.
 
 ## Phase 8: QA, Release And Claims
 
-Read `qa-release.md`, `visual-regression.md`, `bot-playtesting.md`, and quality
-references when applicable.
+Use the Phase 8 route in `load-budgets.md`. Read `qa-release.md` and the
+applicable sections of `quality-gates.md`. Open `visual-regression.md` or
+`bot-playtesting.md` only after making that harness decision, and open
+`quality-scorecard.md` only for premium/showcase claims.
 
 Verify:
 

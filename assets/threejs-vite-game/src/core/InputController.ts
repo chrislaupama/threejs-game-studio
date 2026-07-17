@@ -8,6 +8,19 @@ type PointerState = {
   radius: number;
 };
 
+function ownsKeyboardInteraction(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  if (target instanceof HTMLElement && target.isContentEditable) return true;
+  return Boolean(
+    target.closest(
+      'button, a[href], input, select, textarea, summary, [contenteditable=""], ' +
+      '[contenteditable="true"], [role="button"], [role="checkbox"], ' +
+      '[role="menuitem"], [role="radio"], [role="slider"], [role="switch"], ' +
+      '[role="tab"], [data-game-hotkeys="off"]',
+    ),
+  );
+}
+
 export class InputController {
   private readonly keys = new Set<string>();
   private readonly pointer = new THREE.Vector2();
@@ -25,6 +38,13 @@ export class InputController {
   private restartPressed = false;
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
+    // Let focused controls own Enter, Space, arrows, and printable shortcuts.
+    // Escape remains a global, conventional pause/resume key.
+    if (
+      event.defaultPrevented ||
+      (event.code !== 'Escape' && ownsKeyboardInteraction(event.target))
+    ) return;
+
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(event.code)) {
       event.preventDefault();
     }
@@ -86,6 +106,18 @@ export class InputController {
     this.dashPointerDown = false;
   };
 
+  private readonly onDashKeyDown = (event: KeyboardEvent) => {
+    if (event.code !== 'Space' && event.code !== 'Enter') return;
+    event.preventDefault();
+    this.dashPointerDown = true;
+  };
+
+  private readonly onDashKeyUp = (event: KeyboardEvent) => {
+    if (event.code !== 'Space' && event.code !== 'Enter') return;
+    event.preventDefault();
+    this.dashPointerDown = false;
+  };
+
   private readonly onPauseClick = () => {
     this.pausePressed = true;
   };
@@ -120,6 +152,8 @@ export class InputController {
     this.dashButton.addEventListener('pointerup', this.onDashUp);
     this.dashButton.addEventListener('pointercancel', this.onDashUp);
     this.dashButton.addEventListener('pointerleave', this.onDashUp);
+    this.dashButton.addEventListener('keydown', this.onDashKeyDown);
+    this.dashButton.addEventListener('keyup', this.onDashKeyUp);
     this.pauseButton.addEventListener('click', this.onPauseClick);
     this.restartButton.addEventListener('click', this.onRestartClick);
     window.addEventListener('blur', this.onWindowBlur);
@@ -177,6 +211,8 @@ export class InputController {
     this.dashButton.removeEventListener('pointerup', this.onDashUp);
     this.dashButton.removeEventListener('pointercancel', this.onDashUp);
     this.dashButton.removeEventListener('pointerleave', this.onDashUp);
+    this.dashButton.removeEventListener('keydown', this.onDashKeyDown);
+    this.dashButton.removeEventListener('keyup', this.onDashKeyUp);
     this.pauseButton.removeEventListener('click', this.onPauseClick);
     this.restartButton.removeEventListener('click', this.onRestartClick);
     window.removeEventListener('blur', this.onWindowBlur);

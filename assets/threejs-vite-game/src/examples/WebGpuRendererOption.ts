@@ -4,7 +4,11 @@ import { ClusteredLighting } from 'three/addons/lighting/ClusteredLighting.js';
 
 const FIXED_STEP_SECONDS = 1 / 60;
 const MAX_FRAME_DELTA_SECONDS = 0.1;
-const MAX_STEPS_PER_FRAME = 5;
+// The step cap covers the entire accepted frame delta. Keeping these values
+// coupled prevents the loop from silently discarding simulated time.
+const MAX_STEPS_PER_FRAME = Math.ceil(
+  MAX_FRAME_DELTA_SECONDS / FIXED_STEP_SECONDS,
+);
 
 export type WebGpuBackendName =
   | 'webgpu'
@@ -243,13 +247,6 @@ export class WebGpuRendererOption {
       this.config.update(FIXED_STEP_SECONDS);
       this.accumulator -= FIXED_STEP_SECONDS;
       steps += 1;
-    }
-
-    if (
-      steps === MAX_STEPS_PER_FRAME &&
-      this.accumulator >= FIXED_STEP_SECONDS
-    ) {
-      this.accumulator = 0;
     }
 
     this.resize();

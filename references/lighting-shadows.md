@@ -91,6 +91,7 @@ export async function installLighting(
   sun.shadow.camera.right = 10;
   sun.shadow.camera.top = 10;
   sun.shadow.camera.bottom = -10;
+  sun.shadow.camera.updateProjectionMatrix();
   sun.shadow.normalBias = 0.025;
   scene.add(sun, sun.target);
 
@@ -151,8 +152,10 @@ silently compensate for another.
 ## HDR Environment Lighting
 
 Use `HDRLoader` for local RGBE `.hdr` files in r185. `RGBELoader` still ships
-only as a deprecated compatibility alias, so do not use it in new code. Do not
-label HDR radiance as sRGB.
+only as a deprecated compatibility alias, so do not use it in new code. Use
+`EXRLoader` for `.exr` and `UltraHDRLoader` for Ultra HDR JPEG. All three
+loaders return environment color data tagged `LinearSRGBColorSpace`; preserve
+that metadata rather than changing it to `SRGBColorSpace` or `NoColorSpace`.
 
 ```ts
 import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
@@ -178,7 +181,8 @@ resolution for lighting; a giant visible background can be a separate asset if
 the camera requires more detail.
 
 When an HDR is unavailable, `RoomEnvironment` can provide a procedural neutral
-IBL for viewers and material validation:
+IBL for viewers and material validation. This version is for `WebGLRenderer`,
+with `THREE` imported from `three`:
 
 ```ts
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
@@ -206,32 +210,76 @@ function disposeGeneratedEnvironment() {
 Retain and dispose the returned `WebGLRenderTarget`, not only its `.texture`.
 The target owns the generated environment texture and render attachments.
 
+For `WebGPURenderer`, import `THREE` from `three/webgpu` so its renderer-aware
+`PMREMGenerator` is used, and initialize the backend before synchronous PMREM
+generation:
+
+```ts
+import * as THREE from 'three/webgpu';
+
+await renderer.init();
+const pmrem = new THREE.PMREMGenerator(renderer);
+const environmentTarget = pmrem.fromScene(room);
+```
+
+Do not pass a `WebGPURenderer` to the WebGL PMREM implementation imported from
+`three`. The older `fromSceneAsync()` initialization workaround is deprecated;
+initialize the renderer explicitly instead.
+
 ## Directional, Spot, Point, And Area-Light Recipes
 
 ### Follow a bounded play area with a directional shadow
 
-Keep the light direction stable but move its target/frustum center to a snapped
-region around the player. Snapping reduces visible shadow shimmer:
+Keep the light direction and orthographic extent fixed, then snap the moving
+center in light space by one shadow texel. This assumes the light and target
+are direct scene children and the chosen offset is not parallel to world-up:
 
 ```ts
+const sunOffset = new THREE.Vector3(12, 18, 8);
+const worldUp = new THREE.Vector3(0, 1, 0);
+const lightDepthAxis = sunOffset.clone().normalize();
+const lightRight = new THREE.Vector3()
+  .crossVectors(worldUp, lightDepthAxis)
+  .normalize();
+const lightUp = new THREE.Vector3()
+  .crossVectors(lightDepthAxis, lightRight)
+  .normalize();
 const shadowCenter = new THREE.Vector3();
 
+const shadowCamera = sun.shadow.camera;
+const texelX =
+  (shadowCamera.right - shadowCamera.left) / sun.shadow.mapSize.x;
+const texelY =
+  (shadowCamera.top - shadowCamera.bottom) / sun.shadow.mapSize.y;
+
 function updateSunRegion(playerPosition: THREE.Vector3) {
-  const snap = 4;
-  shadowCenter.set(
-    Math.round(playerPosition.x / snap) * snap,
-    0,
-    Math.round(playerPosition.z / snap) * snap,
-  );
+  const x = Math.round(playerPosition.dot(lightRight) / texelX) * texelX;
+  const y = Math.round(playerPosition.dot(lightUp) / texelY) * texelY;
+  const z = playerPosition.dot(lightDepthAxis);
+
+  shadowCenter
+    .copy(lightRight)
+    .multiplyScalar(x)
+    .addScaledVector(lightUp, y)
+    .addScaledVector(lightDepthAxis, z);
+
   sun.target.position.copy(shadowCenter);
-  sun.position.copy(shadowCenter).add(new THREE.Vector3(12, 18, 8));
+  sun.position.copy(shadowCenter).add(sunOffset);
   sun.target.updateMatrixWorld();
 }
 ```
 
-Reuse the offset vector in production instead of allocating it in the update.
-For a large world that needs multiple shadow ranges, consider a measured
-cascaded-shadow implementation rather than expanding one map across the world.
+Recompute texel size whenever the map size or frustum extent changes. For a
+large world that needs multiple ranges, use `CSM` from
+`three/addons/csm/CSM.js` with `WebGLRenderer`, or `CSMShadowNode` from
+`three/addons/csm/CSMShadowNode.js` with `WebGPURenderer`. Cascades multiply
+shadow passes; start with the fewest ranges that solve the measured view.
+
+The WebGL addon must receive every affected material through
+`csm.setupMaterial(material)` and run `csm.update()` before each render. For
+WebGPU, construct `CSMShadowNode` with the directional light, assign it to
+`light.shadow.shadowNode`, and call `updateFrustums()` after camera or cascade
+settings change; its per-frame positioning runs through the node update path.
 
 ### Flashlight with `SpotLight`
 
@@ -320,7 +368,9 @@ helper.update();
 ```
 
 Anything outside the shadow camera cannot cast or receive that light's shadow.
-Near/far range and orthographic width both consume depth-map precision.
+For a directional shadow, orthographic width and height determine world units
+per texel in X/Y; the near/far span determines depth precision. Tighten those
+independently instead of assuming a larger map fixes both.
 
 ### Bias deliberately
 
@@ -334,21 +384,84 @@ Near/far range and orthographic width both consume depth-map precision.
 Tune with a close ground contact, a vertical wall, a thin prop, and a distant
 receiver all visible.
 
-### Static shadows
+### Custom-deformed casters
 
-When casters, receivers, and shadow lights are static, stop regenerating maps:
+Built-in skinning, morph targets, displacement maps, alpha-tested maps, and
+opt-in shadow clipping (`clipShadows = true`) are mirrored by the renderer's
+shadow materials. A custom WebGL vertex deformation added through
+`onBeforeCompile` or `ShaderMaterial` is not. Apply the same transform to the
+visible, depth, and distance programs:
 
 ```ts
-renderer.shadowMap.autoUpdate = false;
-renderer.shadowMap.needsUpdate = true; // render one fresh shadow update
+const windTime = { value: 0 };
+
+function installWindDeformation(material: THREE.Material) {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.windTime = windTime;
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        '#include <common>\nuniform float windTime;',
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         transformed.x += sin(position.y * 5.0 + windTime)
+           * 0.08 * max(position.y, 0.0);`,
+      );
+  };
+  material.customProgramCacheKey = () => 'shared-wind-v1';
+}
+
+const visibleMaterial = new THREE.MeshStandardMaterial({ color: 0x5f8f43 });
+const windDepthMaterial = new THREE.MeshDepthMaterial({
+  depthPacking: THREE.RGBADepthPacking,
+});
+const windDistanceMaterial = new THREE.MeshDistanceMaterial();
+
+installWindDeformation(visibleMaterial);
+installWindDeformation(windDepthMaterial);
+installWindDeformation(windDistanceMaterial);
+
+mesh.material = visibleMaterial;
+mesh.customDepthMaterial = windDepthMaterial;       // directional and spot
+mesh.customDistanceMaterial = windDistanceMaterial; // point
+
+// In the frame update:
+windTime.value = elapsedSeconds;
+```
+
+Keep the injected transform and its uniforms in one shared function as above;
+any mismatch produces detached or undeformed shadows. Dispose both custom
+shadow materials with the visible material. For production lit bending, also
+deform the visible material's normals; the depth and distance passes only need
+matching positions and cutout rules. These `custom*Material` hooks are
+WebGL-only. With a WebGPU/node material, `positionNode` is reused for the shadow
+pass by default; set `castShadowPositionNode` only when the caster needs a
+different shadow-specific position.
+
+### Static shadows
+
+When one light's casters, receivers, and transform are static, freeze only that
+light's map:
+
+```ts
+sun.shadow.autoUpdate = false;
+sun.shadow.needsUpdate = true; // render one fresh update for this light
 
 function afterStaticLightingChanged() {
-  renderer.shadowMap.needsUpdate = true;
+  sun.shadow.needsUpdate = true;
 }
 ```
 
-Do not freeze shadows while a shadow-casting player or door still moves.
-Separate static baked/fake shadowing from the small set of dynamic casters.
+With `WebGLRenderer` only, use `renderer.shadowMap.autoUpdate = false` when every
+shadow light can be frozen; `renderer.shadowMap.needsUpdate = true` then
+refreshes the global shadow system. `WebGPURenderer` exposes the per-light
+`LightShadow` flags shown above, not those two global update flags. If both
+WebGL's global gate and a light's per-light gate are disabled, set both
+`renderer.shadowMap.needsUpdate` and `light.shadow.needsUpdate` for the next
+refresh. Do not freeze a light while any caster or receiver visible to it still
+moves. Separate static baked/fake shadowing from dynamic casters.
 
 ### Directional framing + contact-shadow fake
 
@@ -367,6 +480,7 @@ sun.shadow.camera.top = 12;
 sun.shadow.camera.bottom = -12;
 sun.shadow.camera.near = 1;
 sun.shadow.camera.far = 40;
+sun.shadow.camera.updateProjectionMatrix();
 scene.add(sun);
 scene.add(sun.target);
 
@@ -377,10 +491,18 @@ blob.scale.setScalar(0.9 + player.speed * 0.05);
 
 ### Shadow type
 
-Use `THREE.PCFShadowMap` as the current filtered WebGL baseline. Do not introduce
-deprecated `PCFSoftShadowMap`. `BasicShadowMap` is cheapest and unfiltered;
-`VSMShadowMap` has different blur and light-bleeding tradeoffs. Compare real
-screenshots and GPU time before changing the type.
+Use `THREE.PCFShadowMap` as the current filtered baseline. Do not introduce
+deprecated `PCFSoftShadowMap`. `BasicShadowMap` is cheapest and unfiltered.
+`VSMShadowMap` adds separable blur controlled by `light.shadow.radius` and
+`light.shadow.blurSamples`, can leak light, and renders `receiveShadow` objects
+into the shadow pass even when `castShadow` is false. Shadow-map type is a
+renderer-wide choice, not a per-light setting.
+
+With `WebGLRenderer`, VSM does not support `PointLight`; the renderer warns and
+skips that point-light shadow. With `WebGPURenderer`, point lights use the point
+shadow filter rather than the VSM blur path, so do not select VSM expecting a
+variance-blurred point shadow. Prefer Basic or PCF behavior for portable point
+shadows. Compare screenshots, caster counts, and GPU time before changing type.
 
 ## Cheap Grounding And Baked Alternatives
 
@@ -435,6 +557,26 @@ non-overlapping `uv1` set and the texture's `channel` set to `1`. A bake is not
 proof of correct dynamic gameplay lighting; keep interactive silhouettes and
 hazards readable.
 
+For an HDR/EXR lightmap, preserve `LinearSRGBColorSpace`; for AO, use
+`NoColorSpace`. Both commonly use the second UV set:
+
+```ts
+bakedLight.colorSpace = THREE.LinearSRGBColorSpace;
+bakedLight.channel = 1;
+
+bakedAo.colorSpace = THREE.NoColorSpace;
+bakedAo.channel = 1;
+
+material.lightMap = bakedLight;
+material.lightMapIntensity = 1;
+material.aoMap = bakedAo;
+material.aoMapIntensity = 1;
+material.needsUpdate = true; // required when adding previously absent maps
+```
+
+Do not blindly tag an LDR lightmap as linear; match the encoding produced by
+the baker/export pipeline and verify it through the complete output transform.
+
 ## Common Failures
 
 - **PBR object is black:** no useful direct/environment light, invalid normals,
@@ -488,6 +630,8 @@ hazards readable.
   environment texture.
 - Dispose generated PMREM render targets and the `PMREMGenerator` that produced
   them; do not dispose only `renderTarget.texture`.
+- For WebGL `CSM`, call `remove()` and `dispose()`. For `CSMShadowNode`, clear
+  the light's custom shadow-node assignment and call the node's `dispose()`.
 - Dispose blob geometry, material, and texture once their shared owner releases
   the final borrower.
 - Remove animated-light callbacks, timers, debug GUI bindings, and listeners.
@@ -526,7 +670,14 @@ it. Keep environment ownership at the scene/asset boundary.
 - [RectAreaLightTexturesLib](https://threejs.org/docs/pages/RectAreaLightTexturesLib.html)
 - [LightShadow](https://threejs.org/docs/pages/LightShadow.html)
 - [WebGLRenderer shadow map](https://threejs.org/docs/pages/WebGLRenderer.html)
+- [WebGPURenderer guide](https://threejs.org/manual/en/webgpurenderer.html)
 - [HDRLoader](https://threejs.org/docs/pages/HDRLoader.html)
+- [EXRLoader](https://threejs.org/docs/pages/EXRLoader.html)
+- [UltraHDRLoader](https://threejs.org/docs/pages/UltraHDRLoader.html)
 - [PMREMGenerator](https://threejs.org/docs/pages/PMREMGenerator.html)
 - [RoomEnvironment](https://threejs.org/docs/pages/RoomEnvironment.html)
 - [Scene environment controls](https://threejs.org/docs/pages/Scene.html)
+- [Object3D custom shadow materials](https://threejs.org/docs/pages/Object3D.html)
+- [NodeMaterial shadow position](https://threejs.org/docs/pages/NodeMaterial.html)
+- [WebGL cascaded shadow maps](https://threejs.org/docs/pages/CSM.html)
+- [WebGPU cascaded shadow maps](https://threejs.org/docs/pages/CSMShadowNode.html)

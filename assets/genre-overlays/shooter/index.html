@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#141820" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <title>Vector Strike · Three.js Arena Shooter</title>
+  </head>
+  <body>
+    <main id="app">
+      <canvas
+        id="game-canvas"
+        tabindex="0"
+        aria-label="Vector Strike arena shooter. Move with WASD, arrow keys, or the touch stick; hold Space, Shift, or Fire to shoot along your facing direction."
+      ></canvas>
+
+      <section id="hud" aria-label="Mission status">
+        <div id="targets-metric" class="hud-metric" aria-label="0 of 6 targets neutralized">
+          <span>Targets</span>
+          <strong><span id="score-value">0</span>/<span id="target-value">6</span></strong>
+        </div>
+        <div id="health-metric" class="hud-metric" aria-label="Hull integrity 1 of 1">
+          <span>Hull</span>
+          <strong><span id="health-value">1</span>/<span id="max-health-value">1</span></strong>
+        </div>
+        <div id="wave-metric" class="hud-metric" aria-label="Wave 1 of 1">
+          <span>Wave</span>
+          <strong><span id="wave-value">1</span>/<span id="total-waves-value">1</span></strong>
+        </div>
+        <div class="hud-metric" aria-label="Mission time remaining">
+          <span>Time</span>
+          <strong id="timer-value">45s</strong>
+        </div>
+        <div id="status-line" role="status" aria-live="polite" aria-atomic="true">
+          Wave 1 · 6 targets remain · Hold Fire
+        </div>
+      </section>
+
+      <div id="system-controls" aria-label="Game settings">
+        <button id="mute-button" type="button" aria-pressed="false">Sound on</button>
+        <button
+          id="pause-button"
+          type="button"
+          aria-pressed="false"
+          aria-keyshortcuts="P Escape"
+        >
+          Pause
+        </button>
+      </div>
+
+      <section
+        id="state-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="state-title"
+        aria-describedby="state-copy"
+        hidden
+      >
+        <p id="state-kicker">Vector Strike</p>
+        <h1 id="state-title">Game paused</h1>
+        <p id="state-copy">Press P, Escape, or Resume to return to the fight.</p>
+        <button id="retry-button" type="button" aria-keyshortcuts="R Enter" hidden>
+          Redeploy
+        </button>
+      </section>
+
+      <div id="touch-controls" role="group" aria-label="Shooter touch controls">
+        <div id="touch-stick" role="application" aria-label="Movement joystick">
+          <div id="touch-knob"></div>
+        </div>
+        <button
+          id="dash-button"
+          type="button"
+          aria-label="Hold to fire"
+          aria-keyshortcuts="Space Shift"
+        >
+          Fire
+        </button>
+      </div>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

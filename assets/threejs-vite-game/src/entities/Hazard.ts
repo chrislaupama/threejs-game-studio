@@ -1,22 +1,55 @@
 import * as THREE from 'three';
 import { InterpolatedTransform } from '../utils/InterpolatedTransform';
 
+type HazardResources = {
+  references: number;
+  coreGeometry: THREE.OctahedronGeometry;
+  ringGeometry: THREE.TorusGeometry;
+  coreMaterial: THREE.MeshStandardMaterial;
+  ringMaterial: THREE.MeshBasicMaterial;
+};
+
+let sharedResources: HazardResources | null = null;
+
+function acquireResources(): HazardResources {
+  if (!sharedResources) {
+    sharedResources = {
+      references: 0,
+      coreGeometry: new THREE.OctahedronGeometry(0.56, 0),
+      ringGeometry: new THREE.TorusGeometry(0.82, 0.045, 8, 36),
+      coreMaterial: new THREE.MeshStandardMaterial({
+        color: '#d94f35',
+        emissive: '#6d160d',
+        emissiveIntensity: 0.9,
+        roughness: 0.38,
+        metalness: 0.2,
+      }),
+      ringMaterial: new THREE.MeshBasicMaterial({ color: '#ff8a66' }),
+    };
+  }
+  sharedResources.references += 1;
+  return sharedResources;
+}
+
+function releaseResources(resources: HazardResources): void {
+  if (resources !== sharedResources || resources.references <= 0) return;
+  resources.references -= 1;
+  if (resources.references > 0) return;
+  resources.coreGeometry.dispose();
+  resources.ringGeometry.dispose();
+  resources.coreMaterial.dispose();
+  resources.ringMaterial.dispose();
+  sharedResources = null;
+}
+
 export class Hazard {
   readonly group = new THREE.Group();
   readonly radius = 0.72;
 
-  private readonly coreGeometry = new THREE.OctahedronGeometry(0.56, 0);
-  private readonly ringGeometry = new THREE.TorusGeometry(0.82, 0.045, 8, 36);
-  private readonly coreMaterial = new THREE.MeshStandardMaterial({
-    color: '#d94f35',
-    emissive: '#6d160d',
-    emissiveIntensity: 0.9,
-    roughness: 0.38,
-    metalness: 0.2,
-  });
-  private readonly ringMaterial = new THREE.MeshBasicMaterial({ color: '#ff8a66' });
+  private readonly resources = acquireResources();
   private readonly rootPresentation: InterpolatedTransform;
   private readonly corePresentation: InterpolatedTransform;
+  private disposed = false;
 
   constructor(
     private readonly centerX: number,
@@ -24,11 +57,17 @@ export class Hazard {
     private readonly travel: number,
     private readonly phase: number,
   ) {
-    const core = new THREE.Mesh(this.coreGeometry, this.coreMaterial);
+    const core = new THREE.Mesh(
+      this.resources.coreGeometry,
+      this.resources.coreMaterial,
+    );
     core.castShadow = true;
     this.group.add(core);
 
-    const ring = new THREE.Mesh(this.ringGeometry, this.ringMaterial);
+    const ring = new THREE.Mesh(
+      this.resources.ringGeometry,
+      this.resources.ringMaterial,
+    );
     ring.rotation.x = Math.PI / 2;
     this.group.add(ring);
     this.rootPresentation = new InterpolatedTransform(this.group);
@@ -70,9 +109,8 @@ export class Hazard {
   }
 
   dispose(): void {
-    this.coreGeometry.dispose();
-    this.ringGeometry.dispose();
-    this.coreMaterial.dispose();
-    this.ringMaterial.dispose();
+    if (this.disposed) return;
+    this.disposed = true;
+    releaseResources(this.resources);
   }
 }

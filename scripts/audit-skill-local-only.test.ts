@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,7 +25,10 @@ interface AuditResult {
   stderr: string;
 }
 
-function runAudit(files: Record<string, string>): AuditResult {
+function runAudit(
+  files: Record<string, string>,
+  setup?: (root: string) => void,
+): AuditResult {
   const directory = mkdtempSync(join(tmpdir(), "audit-skill-local-only-"));
   const root = join(directory, "skill");
   try {
@@ -33,6 +37,7 @@ function runAudit(files: Record<string, string>): AuditResult {
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, content, "utf8");
     }
+    setup?.(root);
     const result = spawnSync(
       process.execPath,
       ["--import", "tsx", SCRIPT, root],
@@ -97,6 +102,166 @@ test("rejects a remote runtime URL", () => {
   });
   assert.equal(result.status, 1);
   assert.match(result.stdout, /non-local URL/);
+});
+
+test("scans textual glTF manifests for remote dependencies", () => {
+  const result = runAudit({
+    "assets/models/remote.gltf": JSON.stringify({
+      asset: { version: "2.0" },
+      buffers: [{ uri: "https:" + "//cdn.example/game.bin", byteLength: 4 }],
+    }),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /remote\.gltf/);
+  assert.match(result.stdout, /non-local URL/);
+});
+
+test("decodes escaped-solidus URLs in glTF string values", () => {
+  const result = runAudit({
+    "assets/models/escaped.gltf": [
+      "{",
+      '  "asset": { "version": "2.0" },',
+      '  "buffers": [{ "uri": "https:\\/\\/cdn.example\\/game.bin", "byteLength": 4 }]',
+      "}",
+    ].join("\n"),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /escaped\.gltf:3/);
+  assert.match(result.stdout, /https:\/\/cdn\.example\/game\.bin/);
+});
+
+test("decodes escaped URLs in JSON and JavaScript strings", () => {
+  const result = runAudit({
+    "assets/game/config.json":
+      '{"api":"https:\\/\\/evil.example\\/collect"}',
+    "assets/game/model.ts":
+      "const model = 'https:\\/\\/evil.example\\/hero.glb'; loader.load(model);\n",
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /assets\/game\/config\.json/);
+  assert.match(result.stdout, /assets\/game\/model\.ts/);
+});
+
+test("scans dist output for embedded remote URLs", () => {
+  const rejected = runAudit({
+    "assets/game/dist/assets/index.js":
+      "const model = 'https://cdn.example/hero.glb';\nfetch(model);\n",
+  });
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stdout, /dist\/assets\/index\.js/);
+  assert.match(rejected.stdout, /non-local URL/);
+
+  const localBundle = runAudit({
+    "assets/game/dist/assets/index.js": "fetch('/models/hero.glb');\n",
+  });
+  assert.equal(localBundle.status, 0, diagnostic(localBundle));
+});
+
+test("still scans dist output for persistent network clients", () => {
+  const result = runAudit({
+    "assets/game/dist/assets/realtime.js":
+      "const socket=new WebSocket(endpoint);socket.addEventListener('message',onMessage);\n",
+    "assets/game/dist/assets/minified.js":
+      "(()=>{const client=require('ws');client.connect(endpoint)})();\n",
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /dist\/assets\/realtime\.js/);
+  assert.match(result.stdout, /dist\/assets\/minified\.js/);
+  assert.match(result.stdout, /network client command\/import/);
+});
+
+test("constant-folds hidden remote targets in dist while allowing local targets", () => {
+  const remote = runAudit({
+    "assets/game/dist/app.js": [
+      "const endpoint='https:'+'/'+'/evil.example/collect';",
+      "fetch(endpoint);",
+      "const request=new XMLHttpRequest();",
+      "const metrics='https:'+'/'+'/evil.example/metrics';",
+      "request.open('POST',metrics);",
+    ].join("\n"),
+  });
+  assert.equal(remote.status, 1);
+  assert.ok((remote.stdout.match(/non-local network target/g)?.length ?? 0) >= 2);
+
+  const local = runAudit({
+    "assets/game/dist/app.js": [
+      "const chunk='/'+'assets/chunk.js';",
+      "fetch(chunk);",
+      "const request=new XMLHttpRequest();",
+      "request.open('GET','/state.json');",
+    ].join("\n"),
+  });
+  assert.equal(local.status, 0, diagnostic(local));
+});
+
+test("scans executable component scripts and Astro frontmatter", () => {
+  const result = runAudit({
+    "assets/game/App.vue": [
+      '<script setup lang="ts">',
+      "fetch('https://evil.example/vue');",
+      "</script>",
+      '<style>/* https://style.example/citation */</style>',
+    ].join("\n"),
+    "assets/game/Page.astro": [
+      "---",
+      "const endpoint = 'https://evil.example/astro';",
+      "---",
+      "<div>Local markup</div>",
+    ].join("\n"),
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /App\.vue/);
+  assert.match(result.stdout, /Page\.astro/);
+  assert.doesNotMatch(result.stdout, /style\.example/);
+});
+
+test("explicitly rejects symbolic links", () => {
+  const result = runAudit(
+    {
+      "assets/game/real.ts": "export const local = true;\n",
+      "shared/current.ts": "export const current = true;\n",
+    },
+    (root) => {
+      symlinkSync("real.ts", join(root, "assets/game/linked.ts"));
+      symlinkSync("../../shared", join(root, "assets/game/linked-directory"));
+    },
+  );
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout.match(/symbolic link is not allowed/g)?.length, 2);
+});
+
+test("ignores generated JavaScript comment citations but not runtime strings", () => {
+  const commentsOnly = runAudit({
+    "assets/game/dist/index.js":
+      "// Research: https://papers.example/lighting\nexport const local = '/game';\n",
+  });
+  assert.equal(commentsOnly.status, 0, diagnostic(commentsOnly));
+
+  const runtime = runAudit({
+    "assets/game/dist/index.js":
+      "export const endpoint = 'https://papers.example/lighting';\n",
+  });
+  assert.equal(runtime.status, 1);
+  assert.match(runtime.stdout, /non-local URL/);
+});
+
+test("rejects remote source-map directives without treating citations as runtime URLs", () => {
+  const remote = runAudit({
+    "assets/game/dist/index.js":
+      "export const local = '/game';\n//# sourceMappingURL=https://maps.example/index.js.map\n",
+  });
+  assert.equal(remote.status, 1);
+  assert.match(remote.stdout, /non-local source map URL/);
+
+  const allowed = runAudit({
+    "assets/game/dist/local.js": [
+      "// Research citation: https://papers.example/rendering",
+      "export const local = '/game';",
+      "//# sourceMappingURL=local.js.map",
+      "/*# sourceMappingURL=data:application/json;base64,e30= */",
+    ].join("\n"),
+  });
+  assert.equal(allowed.status, 0, diagnostic(allowed));
 });
 
 test("rejects protocol-relative URLs in TypeScript and CSS", () => {
@@ -247,4 +412,24 @@ test("ignores legal attribution and lockfile registry URLs", () => {
     "SKILL.md": "Local only.",
   });
   assert.equal(result.status, 0, diagnostic(result));
+});
+
+test("runs the CLI main guard when invoked through a symbolic link", () => {
+  const directory = mkdtempSync(join(tmpdir(), "audit-skill-main-link-"));
+  try {
+    const root = join(directory, "skill");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, "SKILL.md"), "Local only.\n", "utf8");
+    const linkedScript = join(directory, "audit-skill-linked.ts");
+    symlinkSync(SCRIPT, linkedScript);
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", linkedScript, root],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /Skill local-only audit passed/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

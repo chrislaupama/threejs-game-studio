@@ -133,9 +133,10 @@ drag so release/cancel is received even outside the canvas:
 
 ```ts
 let dragPointer: number | null = null;
+let pointerDragDisposed = false;
 
 function onPointerDown(event: PointerEvent) {
-  if (dragPointer !== null) return;
+  if (pointerDragDisposed || dragPointer !== null) return;
   dragPointer = event.pointerId;
   canvas.setPointerCapture(event.pointerId);
   input.setAimPointer(event.clientX, event.clientY);
@@ -159,6 +160,22 @@ canvas.addEventListener('pointerdown', onPointerDown);
 canvas.addEventListener('pointermove', onPointerMove);
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
+
+function disposePointerDrag() {
+  if (pointerDragDisposed) return;
+  pointerDragDisposed = true;
+
+  canvas.removeEventListener('pointerdown', onPointerDown);
+  canvas.removeEventListener('pointermove', onPointerMove);
+  canvas.removeEventListener('pointerup', endPointer);
+  canvas.removeEventListener('pointercancel', endPointer);
+
+  if (dragPointer !== null && canvas.hasPointerCapture(dragPointer)) {
+    canvas.releasePointerCapture(dragPointer);
+  }
+  dragPointer = null;
+  input.releaseAimPointer();
+}
 ```
 
 Clear held keyboard/pointer actions on `window.blur`, page visibility loss,
@@ -214,6 +231,13 @@ raycaster.params.Points.threshold = 0.08;
 Tune them for world scale and camera distance. `Raycaster.firstHitOnly` is not
 a core Three.js property; it belongs to third-party acceleration integrations.
 
+Mesh raycasts respect material sidedness. With the default `FrontSide`, a
+triangle is detected only when it faces the ray origin; rays entering through a
+back face miss. Fix incorrect winding on owned geometry, use closed pick
+proxies, or deliberately use a `DoubleSide` proxy material when interaction
+must work from both sides. Do not make every visible material double-sided just
+to conceal a picking bug.
+
 ### World-space target queries
 
 `object.position` is local to its parent. Use a reused target for world space:
@@ -223,8 +247,22 @@ const worldPosition = new THREE.Vector3();
 object.getWorldPosition(worldPosition);
 ```
 
-Call `scene.updateMatrixWorld()` before an out-of-band raycast if transforms
-changed and no render/update has refreshed matrices yet.
+World matrices must be current before a raycast. A normal render refreshes
+them, but an out-of-band query after programmatic movement may need an explicit
+update:
+
+```ts
+// Update this object's ancestors and its whole owned subtree.
+entity.root.updateWorldMatrix(true, true);
+
+// For a query spanning independently changed objects, force the scene once.
+scene.updateMatrixWorld(true);
+```
+
+Prefer the bounded `updateWorldMatrix(true, true)` form when only one entity
+changed. If `matrixAutoUpdate` is disabled, call `updateMatrix()` after changing
+position/quaternion/scale, or set `matrixWorldNeedsUpdate = true` after writing
+the local `matrix` directly, before refreshing world matrices.
 
 ## Selection And Hover State
 
@@ -272,6 +310,12 @@ orbit.maxDistance = 18;
 orbit.minPolarAngle = 0.15;
 orbit.maxPolarAngle = Math.PI * 0.48;
 orbit.target.set(0, 1, 0);
+orbit.zoomToCursor = true;
+
+// Constrain panning around an authored center of interest.
+orbit.cursor.copy(orbit.target);
+orbit.minTargetRadius = 0;
+orbit.maxTargetRadius = 8;
 orbit.update();
 
 function updateInspection(deltaSeconds: number) {
@@ -280,9 +324,25 @@ function updateInspection(deltaSeconds: number) {
 ```
 
 Pass delta when using time-dependent auto-rotation. Call `update()` after
-programmatically changing camera/target. Use `saveState()` and `reset()` for a
-viewer reset. Fit min/max distance and target from subject bounds instead of
-unexplained constants.
+programmatically changing camera/target. `zoomToCursor` is useful for desktop
+inspection; verify its feel for touch and constrained targets. `cursor` is the
+center used by `minTargetRadius`/`maxTargetRadius`, not a DOM cursor.
+
+Arrow-key panning is opt-in. Own its lifetime explicitly so editor/viewer keys
+do not leak into gameplay or the page:
+
+```ts
+renderer.domElement.tabIndex = 0;
+orbit.listenToKeyEvents(renderer.domElement);
+
+function disposeInspectionControls() {
+  orbit.stopListenToKeyEvents();
+  orbit.dispose();
+}
+```
+
+Use `saveState()` and `reset()` for a viewer reset. Fit distance and target
+limits from subject bounds instead of unexplained constants.
 
 Disable orbit while a transform or UI drag owns the pointer. Dispose controls
 when leaving the mode.
@@ -297,8 +357,10 @@ import { PointerLockControls } from
   'three/addons/controls/PointerLockControls.js';
 
 const look = new PointerLockControls(camera, renderer.domElement);
+let pointerLookDisposed = false;
 
 function requestLookLock() {
+  if (pointerLookDisposed) return;
   look.lock();
 }
 
@@ -315,6 +377,20 @@ function onUnlock() {
 look.addEventListener('lock', onLock);
 look.addEventListener('unlock', onUnlock);
 startButton.addEventListener('click', requestLookLock);
+
+function disposePointerLook() {
+  if (pointerLookDisposed) return;
+  pointerLookDisposed = true;
+
+  startButton.removeEventListener('click', requestLookLock);
+  look.removeEventListener('lock', onLock);
+  look.removeEventListener('unlock', onUnlock);
+
+  if (look.isLocked) look.unlock();
+  look.dispose();
+  input.setLookCaptured(false);
+  input.clearHeldActions();
+}
 ```
 
 For a collision-free debug walk, `moveForward(distance)` and
@@ -351,6 +427,13 @@ transform.attach(selectedObject);
 transform.setMode('translate');
 transform.setSpace('world');
 transform.setTranslationSnap(0.25);
+// Tagged r185 runtime uses `minX`; the aligned DefinitelyTyped declaration
+// misspells only this member as `minx`. Bridge that declaration bug locally.
+const runtimeTransform = transform as TransformControls & { minX: number };
+runtimeTransform.minX = -4;
+transform.maxX = 4;
+transform.minY = 0;
+transform.maxY = 3;
 
 function onDraggingChanged(event: unknown) {
   const dragging =
@@ -365,9 +448,34 @@ transform.addEventListener('dragging-changed', onDraggingChanged);
 ```
 
 Attach only an object already in the scene graph. Decide local/world axes,
-snapping, min/max constraints, commit/cancel, and undo/redo before presenting
-the gizmo as an editor. Manipulate an application-owned container when imported
-asset internals should remain untouched.
+snapping, translation constraints, commit/cancel, and undo/redo before
+presenting the gizmo as an editor. Runtime `minX` through `maxZ` constrain
+translation. Do not assign the r185 type-only typo `minx`: the implementation
+does not read it. Remove the local cast once the installed types declare
+`minX`. Rotation and scale limits remain application policy. Manipulate an
+application-owned container when imported asset internals should remain
+untouched.
+
+For a renderer sub-viewport, set the controls' viewport in logical CSS pixels.
+Its origin is the lower-left of the canvas, even though DOM rectangles use a
+top-left origin:
+
+```ts
+const canvasRect = renderer.domElement.getBoundingClientRect();
+const viewRect = viewportElement.getBoundingClientRect();
+
+transform.viewport = new THREE.Vector4(
+  viewRect.left - canvasRect.left,
+  canvasRect.bottom - viewRect.bottom,
+  viewRect.width,
+  viewRect.height,
+);
+```
+
+Leave `viewport` as `null` for the full canvas and resync it after layout
+changes. `getRaycaster()` returns a raycaster shared by all TransformControls
+instances. Avoid mutating it casually; if a custom gizmo layer is required,
+keep the helper/pickers and the shared raycaster on matching layers.
 
 Teardown:
 
@@ -478,12 +586,55 @@ Avoid stacked smoothing where player, camera target, boom, and final camera each
 lag independently. Keep collision-aware camera placement in the camera rig, not
 inside input handlers.
 
+### Third-Person Action Rig Contract
+
+Use a rig for chase, free, over-shoulder, and lock-on modes; do not parent the
+camera directly to an animated model or bone. One useful ownership hierarchy is:
+
+```text
+semantic actor root (authoritative pose; written by simulation)
+camera rig owner (reads accepted/interpolated actor pose)
+  semantic target/pivot
+    yaw + pitch
+      collision-resolved boom / shoulder offset
+        camera
+```
+
+The hierarchy is conceptual: the rig may stay in world space to avoid inheriting
+actor scale or animation. Its contract is invariant:
+
+1. Device input becomes look/aim and movement intents; it never writes the
+   camera or actor transform from an event handler.
+2. Player and AI intents are resolved by movement/collision first. The rig then
+   follows the accepted authoritative pose (or its render interpolation).
+3. Cast or sweep from the semantic target to the desired camera pose. Snap
+   inward on obstruction, smooth outward after clearance, and exclude the
+   player's own proxy deliberately.
+4. Establish aim intent with a ray from the camera/reticle, then test the muzzle
+   or attack-origin path to that point. Clamp/report range and treat near-cover
+   obstruction as blocked; camera parallax must never permit shooting through a
+   wall beside the actor.
+5. Model free, shoulder, aim, lock-on, cinematic, and shoulder-swap changes as
+   explicit modes/handoffs. Define target-loss, off-screen, too-close, pause,
+   death, and retry fallbacks.
+6. Apply recoil, shake, lean, and framing as bounded rig-owned presentation
+   offsets. Reduced-motion settings cap or disable them, and no offset writes
+   back to canonical actor state.
+
+Tune pivot height, boom length, shoulder side, yaw/pitch limits, FOV,
+sensitivity, recenter delay, collision radius, inward/outward response, and
+lock-on framing as named constants. Verify tight corridors, low ceilings, fast
+turns, slopes, walls beside the muzzle, target loss, shoulder swaps, resize,
+low frame rate, and repeated pause/retry.
+
 ## Common Failures
 
 - **Pick is offset:** coordinates use `window.innerWidth` rather than canvas
   bounds, or CSS scaling/scroll offset was ignored.
 - **Nested glTF child is selected instead of entity:** hit was not resolved to
   the application boundary.
+- **Mesh picks from only one side:** its triangle winding/material side rejects
+  back-face ray intersections; use a deliberate two-sided pick proxy if needed.
 - **Pick misses after programmatic movement:** world matrices were stale.
 - **Proxy cannot be picked:** it was omitted from the raycast target set,
   recursive traversal was disabled for a nested proxy, or raycaster and proxy
@@ -552,7 +703,8 @@ Anonymous inline listeners cannot be removed later. Store callbacks or use an
 1. Test a canvas that is offset, scrolled, CSS-scaled, resized, and high-DPR;
    verify picks remain under the pointer.
 2. Pick nested glTF children, an instance, a proxy layer, a transparent object,
-   and empty space; confirm stable identity and deselection.
+   front/back faces where intended, and empty space; confirm stable identity and
+   deselection.
 3. Exercise pointer down/move/up/cancel, drag leaving the canvas, window blur,
    hidden tab, and pointer-lock exit.
 4. Test keyboard-only, mouse, touch, pen when supported, and a standard-mapped
@@ -561,11 +713,13 @@ Anonymous inline listeners cannot be removed later. Store callbacks or use an
 6. Disconnect/reconnect a controller while buttons are held.
 7. Enter and exit orbit, gameplay, transform drag, pause, cinematic, and retry;
    confirm only one camera owner writes each frame.
-8. Spawn/despawn selectable entities repeatedly; ensure no stale selection,
+8. If using an inset/sub-viewport, drag every gizmo axis at each viewport edge
+   after resize and page scroll; verify its CSS-pixel viewport remains aligned.
+9. Spawn/despawn selectable entities repeatedly; ensure no stale selection,
    pick target, listener, helper, or disposed object remains.
-9. Profile hover raycasts in the worst visible scene and record target count and
+10. Profile hover raycasts in the worst visible scene and record target count and
    CPU time.
-10. Verify essential actions remain available without relying on color, hover,
+11. Verify essential actions remain available without relying on color, hover,
     or a precision pointer.
 
 ## Official Documentation

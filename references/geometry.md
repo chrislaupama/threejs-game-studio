@@ -148,31 +148,50 @@ geometry.computeBoundingBox();
 geometry.computeBoundingSphere();
 ```
 
-Use `Uint32BufferAttribute` indices when more than 65,535 distinct vertices are
-addressed. Call `computeVertexNormals()` after changing positions only when the
-lighting really needs regenerated normals. It is not a per-frame deformation
-strategy.
+`setIndex(number[])` automatically selects a 16- or 32-bit index attribute from
+the largest supplied index. When constructing the attribute yourself, use
+`Uint32BufferAttribute` when an index is 65,535 or greater, matching Three.js's
+primitive-restart-safe automatic choice. Call
+`computeVertexNormals()` after changing positions only when the lighting really
+needs regenerated normals. It is not a per-frame deformation strategy.
 
 ### Update dynamic attributes without allocations
 
-Allocate once, mutate the existing attribute, mark it dirty, and refresh the
-bounds if vertices moved outside them:
+Allocate once, mutate the existing attribute, then upload and recompute derived
+data once per update batch. Update ranges can reduce transfer cost for a few
+small edits:
 
 ```ts
 const positions = geometry.getAttribute('position') as THREE.BufferAttribute;
 positions.setUsage(THREE.DynamicDrawUsage); // set before first render
+const normals = geometry.getAttribute('normal') as
+  THREE.BufferAttribute | undefined;
+normals?.setUsage(THREE.DynamicDrawUsage); // recomputed in each commit below
+let verticesChanged = false;
 
 function raiseVertex(index: number, y: number) {
   positions.setY(index, y);
+  positions.addUpdateRange(index * 3 + 1, 1); // Y is one component
+  verticesChanged = true;
+}
+
+function commitVertexUpdates() {
+  if (!verticesChanged) return;
   positions.needsUpdate = true;
   geometry.computeVertexNormals();
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
+  verticesChanged = false;
 }
 ```
 
-For frequent large deformations, move work into a shader/TSL node or use a
-purpose-built dynamic buffer. Do not recreate geometry each frame.
+Call `commitVertexUpdates()` after all edits for the frame, not after every
+vertex. For many scattered edits, clear the small ranges and upload one
+contiguous range—or the whole attribute—rather than issuing hundreds of tiny
+updates. The WebGL renderer clears processed update ranges. For frequent large
+deformations, move work into a shader/TSL node or use a purpose-built dynamic
+buffer. If the deformation has a known envelope, keep conservative bounds
+instead of recomputing them every frame. Do not recreate geometry each frame.
 
 ## Static Merging
 
@@ -189,22 +208,65 @@ import { mergeGeometries } from
 
 // Contract for this example:
 // - every source mesh is below commonRoot;
+// - sharedMaterial is one THREE.Material used by every source;
+// - every source renders its full geometry;
 // - each source geometry is exclusively owned by this conversion;
 // - sharedMaterial is transferred to the merged mesh.
+if (staticMeshes.length === 0) {
+  throw new Error('Static merge needs at least one source mesh');
+}
+
 commonRoot.updateWorldMatrix(true, true);
+const rootDeterminant = commonRoot.matrixWorld.determinant();
+if (!Number.isFinite(rootDeterminant) || rootDeterminant === 0) {
+  throw new Error('Static merge parent has a non-invertible world transform');
+}
+
 const worldToCommonRoot = commonRoot.matrixWorld.clone().invert();
 const relativeMatrix = new THREE.Matrix4();
 
 function bakeToCommonRoot(mesh: THREE.Mesh): THREE.BufferGeometry {
+  if (mesh instanceof THREE.SkinnedMesh) {
+    throw new Error('Bake skinned meshes after evaluating their deformation');
+  }
+  const hasMorphTargets = Object.values(mesh.geometry.morphAttributes)
+    .some((targets) => targets.length > 0);
+  if (hasMorphTargets) {
+    throw new Error('This static merge does not bake morph targets');
+  }
+  if (mesh.material !== sharedMaterial) {
+    throw new Error('All sources must use the declared shared material');
+  }
+
+  const elementCount =
+    mesh.geometry.index?.count ?? mesh.geometry.getAttribute('position').count;
+  const { start, count } = mesh.geometry.drawRange;
+  if (start !== 0 || (Number.isFinite(count) && count < elementCount)) {
+    throw new Error('Split or copy partial draw ranges before merging');
+  }
+
   mesh.updateWorldMatrix(true, false);
   relativeMatrix.multiplyMatrices(worldToCommonRoot, mesh.matrixWorld);
+  const determinant = relativeMatrix.determinant();
+  if (determinant < 0) {
+    throw new Error('Reflected transforms require triangle winding reversal');
+  }
+  if (!Number.isFinite(determinant) || determinant === 0) {
+    throw new Error('Cannot bake a non-invertible source transform');
+  }
   return mesh.geometry.clone().applyMatrix4(relativeMatrix);
 }
 
 const ownedSourceGeometries = new Set(
   staticMeshes.map((mesh) => mesh.geometry),
 );
-const bakedParts = staticMeshes.map(bakeToCommonRoot);
+const bakedParts: THREE.BufferGeometry[] = [];
+try {
+  for (const mesh of staticMeshes) bakedParts.push(bakeToCommonRoot(mesh));
+} catch (error) {
+  bakedParts.forEach((geometry) => geometry.dispose());
+  throw error;
+}
 const mergedGeometry = mergeGeometries(bakedParts, false);
 
 if (!mergedGeometry) {
@@ -228,10 +290,19 @@ If inputs have different parents, still choose one output parent and compute
 `inverse(outputParent.matrixWorld) * mesh.matrixWorld` for every source. Do not
 leave originals active or the scene will render both copies.
 
-Pass `true` as the second argument only when preserving geometry groups for an
-array of materials. Each material group still produces a draw call. Merging is
-best for static scenery that is culled as one region; avoid one giant merged
-world that remains visible when only a small part is on screen.
+Passing `true` as the second argument creates exactly one new group per input
+geometry, with `materialIndex` equal to that input's order. It does **not**
+preserve the input geometries' existing groups or `drawRange`. Supply one
+material per input in the merged mesh's material array; every resulting group
+still produces a draw call. If a source already uses multiple material groups
+or a partial draw range, split/copy the intended ranges before merging.
+
+`applyMatrix4()` bakes base positions, normals, and tangents, but this example
+deliberately rejects morph targets and skinning. Reflections need explicit
+triangle-winding reversal, so the example rejects negative-determinant
+transforms. Merging is best for static scenery that is culled as one region;
+avoid one giant merged world that remains visible when only a small part is on
+screen.
 
 ## `InstancedMesh`
 
@@ -274,19 +345,23 @@ scene.add(swarm);
 ```
 
 For runtime updates, change all matrices, set `instanceMatrix.needsUpdate` once,
-and recompute bounds after instances move outside the old bounds. Negative
-scales are unsupported. Keep gameplay data in arrays keyed by instance index;
-do not search the scene graph for an instance.
+and recompute bounds after matrices or the active count change. Negative scales
+are unsupported. Keep gameplay data in arrays keyed by instance index; do not
+search the scene graph for an instance.
 
-Use `swarm.count` to draw a dense prefix of allocated instances. For holes,
-swap-remove gameplay records or set an inactive instance to a harmless matrix
-and maintain conservative bounds. Raycasting returns `instanceId`; validate it
-against active gameplay state before acting on it.
+The constructor count is the fixed capacity. `swarm.count` may draw only a
+dense prefix from `0` through `count - 1`, and must never exceed that capacity.
+Use swap-removal to fill holes and update any gameplay-ID mapping; do not hide a
+hole with a zero or far-away matrix. Raycasting returns `instanceId`, so validate
+it against active gameplay state before acting on it. For morphing instances,
+call `setMorphAt()` and then mark `morphTexture.needsUpdate = true` after the
+batch.
 
 ## `BatchedMesh`
 
 Use `BatchedMesh` when many objects share one material but use several
-compatible geometries. Capacity is explicit, so calculate it before creation.
+compatible geometries. Constructor capacities are initial allocations; estimate
+them before creation and resize only at controlled transitions when necessary.
 
 ```ts
 const box = new THREE.BoxGeometry(1, 1, 1);
@@ -319,25 +394,52 @@ for (let i = 0; i < 200; i += 1) {
   batch.setMatrixAt(instanceId, matrix);
 }
 
-batch.perObjectFrustumCulled = true;
-batch.sortObjects = true; // useful for transparent material ordering; measure it
+// Both per-object frustum culling and object sorting default to true.
+batch.computeBoundingBox();
+batch.computeBoundingSphere();
 scene.add(batch);
 ```
 
-Input geometry is copied into batch storage. Dispose the input geometries only
-when no other object owns them. `deleteInstance()` and `deleteGeometry()` free
-logical slots; call `optimize()` only at a controlled transition because it
-reorganizes internal ranges. Use `setVisibleAt()` for temporary hiding and
-`setGeometryIdAt()` when an instance changes form.
+All registered geometries must have compatible attributes and the same indexed
+or non-indexed state. Full attribute/index data is copied into batch storage;
+source groups, `drawRange`, and morph attributes are not transferred. Dispose
+the input geometries only when no other object owns them.
+
+Use `addGeometry(geometry, reservedVertexCount, reservedIndexCount)` when a
+future `setGeometryAt()` replacement needs more room. Replacing a geometry
+changes every instance that references its ID. `deleteGeometry()` also deletes
+all instances referencing that geometry; `deleteInstance()` affects only one.
+Both operations free logical slots. Call `optimize()` only at a controlled
+transition because it reorganizes internal ranges.
+
+`setInstanceCount()` and `setGeometrySize()` resize capacity by reallocating and
+copying internal data, so keep them out of active-frame loops. Use
+`setVisibleAt()` for temporary hiding, `setGeometryIdAt()` when an instance
+changes form, and `setColorAt()` with a `Color` or `Vector4` for per-object
+color. Negative-scale matrices are unsupported. After adding, deleting,
+replacing, or moving objects, recompute the batch bounds; `setMatrixAt()` does
+not invalidate them automatically. Raycasts identify objects with `batchId`.
 
 Prefer `InstancedMesh` for one geometry, especially when matrices change every
 frame. Prefer `BatchedMesh` for mixed compatible geometry and mostly stable
-objects. Profile CPU sorting/culling as well as draw calls.
+objects. `perObjectFrustumCulled` and `sortObjects` default to `true`; profile
+their CPU cost, and use `setCustomSort()` only when the default order is not
+appropriate. Transparent sorting orders batch objects, not intersecting
+triangles within an object, so transparency artifacts can still remain.
+
+`SceneOptimizer` is an experimental addon that can replace compatible scene
+meshes with `BatchedMesh` instances. It mutates the supplied scene and its
+instancing conversion is not implemented in r185. Treat it as an opt-in loading
+or authoring experiment: clone or otherwise preserve the source hierarchy,
+inspect semantic IDs/material ownership after conversion, and keep it only when
+measurement and lifecycle tests beat an explicit batch design.
 
 ## `LOD`
 
 `LOD` selects one child by camera distance. Create visibly compatible levels,
 add hysteresis to prevent boundary flicker, and test the actual gameplay lens.
+Hysteresis is a fraction of the level distance, not a world-unit distance; `0.1`
+offsets that level's switch threshold by ten percent while it is active.
 
 ```ts
 const lod = new THREE.LOD();
@@ -427,8 +529,10 @@ before disposal.
 ## Verification
 
 1. Render the mesh with a normal material and a temporary wireframe view.
-2. Add `Box3Helper`, `BoxHelper`, `VertexNormalsHelper`, or `AxesHelper` only in
-   debug builds to verify bounds, normals, pivot, scale, and axes.
+2. Add `Box3Helper`, `BoxHelper`, or `AxesHelper` only in debug builds to verify
+   bounds, pivot, scale, and axes. Import the addon `VertexNormalsHelper`
+   explicitly from `three/addons/helpers/VertexNormalsHelper.js`; it is not a
+   `THREE` namespace export.
 3. Rotate the camera around custom and merged geometry to find missing or
    reversed faces.
 4. Move the furthest instance beyond its original bounds and confirm it remains
@@ -439,8 +543,10 @@ before disposal.
    pivot changes, value shifts, and silhouette pops.
 7. Compare calls, triangles, CPU frame time, and GPU frame time before and after
    merging, instancing, or batching.
-8. Remove and recreate the system, then confirm `renderer.info.memory.geometries`
-   returns to its prior steady state.
+8. Remove and recreate the system repeatedly, then confirm
+   `renderer.info.memory.geometries` reaches a stable plateau. Internal reusable
+   resources can legitimately remain allocated, so an exact return to the
+   initial count is not required.
 
 ## Official Documentation
 
@@ -451,6 +557,7 @@ before disposal.
 - [BufferGeometryUtils](https://threejs.org/docs/pages/module-BufferGeometryUtils.html)
 - [InstancedMesh](https://threejs.org/docs/pages/InstancedMesh.html)
 - [BatchedMesh](https://threejs.org/docs/pages/BatchedMesh.html)
+- [SceneOptimizer](https://threejs.org/docs/pages/SceneOptimizer.html)
 - [LOD](https://threejs.org/docs/pages/LOD.html)
 - [Optimizing many objects](https://threejs.org/manual/en/optimize-lots-of-objects.html)
 - [How to dispose of objects](https://threejs.org/manual/en/how-to-dispose-of-objects.html)

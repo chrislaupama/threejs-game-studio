@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Audit a Three.js game evidence report for scope-appropriate completion markers. */
 
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
@@ -16,6 +16,7 @@ const BASE_REQUIRED = [
   "controls",
   "unit/focused tests",
   "production preview/base path",
+  "desktop/mobile",
   "checks not run",
   "remaining risks",
 ];
@@ -67,25 +68,37 @@ const POLISHED_REQUIRED = [
 const PHYSICS_REQUIRED = ["collision model", "timestep", "collider"];
 const AUDIO_REQUIRED = ["audio", "gesture unlock", "mute", "pause/restart"];
 const DIFFICULTY_REQUIRED = ["two-reaction-delay bot comparison"];
+const REQUIRED_SECTIONS = new Set([
+  "phase ledger",
+  "local content plan",
+  "game design brief",
+]);
 
-const PASS_PATTERNS = new Map<string, RegExp>([
+const RESULT_FIELDS = new Map<string, RegExp>([
   [
     "build must explicitly pass",
-    /^\s*(?:[-*]\s*)?build(?:\/typecheck)?(?:\s+result)?\s*[:=-]\s*(?:pass|passed|clean)\b/m,
+    /^\s*(?:[-*]\s*)?build(?:\/typecheck)?(?:\s+result)?\s*[:=-]\s*([^\n]+)$/m,
   ],
   [
     "local-only audit must explicitly pass",
-    /^\s*(?:[-*]\s*)?local-only audit\s*[:=-]\s*(?:pass|passed|clean|0 findings|0 failures)\b/m,
+    /^\s*(?:[-*]\s*)?local-only audit\s*[:=-]\s*([^\n]+)$/m,
   ],
   [
     "unit/focused tests must explicitly pass",
-    /^\s*(?:[-*]\s*)?unit\/focused tests\s*[:=-]\s*(?:pass|passed|clean)\b/m,
+    /^\s*(?:[-*]\s*)?unit\/focused tests\s*[:=-]\s*([^\n]+)$/m,
   ],
   [
     "production preview/base path must explicitly pass",
-    /^\s*(?:[-*]\s*)?production preview\/base path\s*[:=-]\s*(?:pass|passed|clean)\b/m,
+    /^\s*(?:[-*]\s*)?production preview\/base path\s*[:=-]\s*([^\n]+)$/m,
   ],
 ]);
+const PASS_TOKEN = "(?:pass(?:ed)?|clean|0\\s+(?:findings|failures))";
+const LEADING_PASS_STATUS = new RegExp(
+  `^${PASS_TOKEN}(?:\\s+(?:at|via|using)\\s+[^\\n;,]+)?[.!]?$`,
+);
+const TRAILING_PASS_STATUS = new RegExp(
+  `^[^\\n;,]+(?:—|–|-|:)\\s*${PASS_TOKEN}[.!]?$`,
+);
 
 const CONTENT_SOURCE_PATTERN =
   /^\s*(?:[-*]\s*)?local content sources\s*[:=-]\s*([^\n]+)$/m;
@@ -96,6 +109,10 @@ const ALLOWED_CONTENT_SOURCES = new Set([
   "deferred",
 ]);
 const CLAIM_TIER_PATTERN = /^\s*(?:[-*]\s*)?claim tier\s*[:=-]\s*([^\n]+)$/m;
+const AUTOMATIC_FAILURES_PATTERN =
+  /^\s*(?:[-*]\s*)?automatic failures remaining\s*[:=-]\s*([^\n]+)$/m;
+const DESKTOP_MOBILE_PATTERN =
+  /^\s*(?:[-*]\s*)?desktop\/mobile\s*[:=-]\s*(.*)$/m;
 const ALLOWED_CLAIM_TIERS = new Set(["none", "polished", "premium", "showcase"]);
 
 interface Options {
@@ -228,14 +245,143 @@ export function normalize(text: string): string {
   ]);
 
   let normalized = text.toLowerCase();
-  for (const [before, after] of replacements) {
-    normalized = normalized.split(before).join(after);
+  // Protect already-canonical phrases, then replace aliases in one token-wise
+  // pass. A replacement can therefore never be consumed by a later alias
+  // (`game design brief` must not become `game game design brief`).
+  const protectedValues = [...new Set(replacements.values())]
+    .sort((left, right) => right.length - left.length)
+    .map((value, index) => ({ value, token: `\u0000canonical-${index}\u0000` }));
+  for (const { value, token } of protectedValues) {
+    normalized = normalized.split(value).join(token);
+  }
+  const aliases = [...replacements.keys()].sort((left, right) => right.length - left.length);
+  const aliasPattern = new RegExp(
+    `(?<![a-z0-9])(?:${aliases.map(escapeRegExp).join("|")})(?![a-z0-9])`,
+    "g",
+  );
+  normalized = normalized.replace(aliasPattern, (alias) => replacements.get(alias)!);
+  for (const { value, token } of protectedValues) {
+    normalized = normalized.split(token).join(value);
   }
   return normalized;
 }
 
-function missingMarkers(text: string, markers: readonly string[]): string[] {
-  return markers.filter((marker) => !text.includes(marker));
+function blankExceptNewlines(value: string): string {
+  return value.replace(/[^\r\n]/g, " ");
+}
+
+/** Remove quoted/sample Markdown while preserving line numbers and layout. */
+export function maskNonEvidenceMarkdown(text: string): string {
+  const commentMasked = text.split("");
+  let inComment = false;
+  for (let index = 0; index < text.length; index += 1) {
+    if (!inComment && text.startsWith("<!--", index)) inComment = true;
+    if (inComment && text[index] !== "\n" && text[index] !== "\r") {
+      commentMasked[index] = " ";
+    }
+    if (inComment && text.startsWith("-->", index)) {
+      for (let cursor = index; cursor < Math.min(index + 3, text.length); cursor += 1) {
+        if (text[cursor] !== "\n" && text[cursor] !== "\r") commentMasked[cursor] = " ";
+      }
+      inComment = false;
+      index += 2;
+    }
+  }
+
+  const output: string[] = [];
+  let fenceKind: string | undefined;
+  for (const line of commentMasked.join("").match(/.*(?:\r?\n|$)/g) ?? []) {
+    if (!line) continue;
+    const fence = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
+    if (fence) {
+      const kind = fence[1]![0]!;
+      if (fenceKind === undefined) fenceKind = kind;
+      else if (fenceKind === kind) fenceKind = undefined;
+      output.push(blankExceptNewlines(line));
+    } else if (fenceKind !== undefined || /^\s*>/.test(line)) {
+      output.push(blankExceptNewlines(line));
+    } else {
+      output.push(line);
+    }
+  }
+  return output.join("");
+}
+
+function cleanLabel(value: string): string {
+  return value
+    .replace(/^\s*(?:[-*]\s*)?/, "")
+    .replace(/[*_`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hasSubstantiveValue(rawValue: string): boolean {
+  const value = rawValue
+    .replace(/<!--.*?-->/g, "")
+    .replace(/[*_`]/g, "")
+    .trim();
+  if (!value || /^[-—–]+$/.test(value)) return false;
+  if (/^\[[^\]]*\]$/.test(value) || /^<[^>]*>$/.test(value)) return false;
+  if (/\[(?:replace|enter|describe|todo|tbd)\b/i.test(value)) return false;
+  if (/^(?:todo|tbd|pending|placeholder|replace(?: me)?|unknown|n\/a\s*—?\s*reason)$/i.test(value)) {
+    return false;
+  }
+  if (/^not applicable\s*(?:—|–|-|:)\s*(?:reason|explanation)?\s*[.!]?$/i.test(value)) {
+    return false;
+  }
+  return true;
+}
+
+function parseEvidenceFields(text: string): Array<{ label: string; value: string }> {
+  const fields: Array<{ label: string; value: string }> = [];
+  for (const rawLine of text.split("\n")) {
+    if (/^\s*#{1,6}\s+/.test(rawLine)) continue;
+    const line = rawLine.replace(/^\s*(?:[-*]\s*)?/, "");
+    const match = /^(.*?)(?::|=|\s+[—–-]\s+)(.*)$/.exec(line);
+    if (!match) continue;
+    const label = cleanLabel(match[1]!);
+    const value = match[2]!.trim();
+    if (label) fields.push({ label, value });
+  }
+  return fields;
+}
+
+function labelMatches(label: string, marker: string): boolean {
+  if (label === marker) return true;
+  if (marker.length <= 3) return false;
+  return (
+    label.startsWith(`${marker} `) ||
+    label.startsWith(`${marker} (`) ||
+    label.endsWith(` ${marker}`)
+  );
+}
+
+function sectionHasEvidence(text: string, marker: string): boolean {
+  const lines = text.split("\n");
+  for (let index = 0; index < lines.length; index += 1) {
+    const heading = /^\s*(#{1,6})\s+(.+?)\s*$/.exec(lines[index]!);
+    if (!heading || cleanLabel(heading[2]!) !== marker) continue;
+    const level = heading[1]!.length;
+    const body: string[] = [];
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      const nextHeading = /^\s*(#{1,6})\s+/.exec(lines[cursor]!);
+      if (nextHeading && nextHeading[1]!.length <= level) break;
+      body.push(lines[cursor]!);
+    }
+    return parseEvidenceFields(body.join("\n"))
+      .some(({ value }) => hasSubstantiveValue(value));
+  }
+  return false;
+}
+
+function missingEvidence(text: string, markers: readonly string[]): string[] {
+  const fields = parseEvidenceFields(text);
+  return markers.filter((marker) => {
+    if (REQUIRED_SECTIONS.has(marker)) return !sectionHasEvidence(text, marker);
+    return !fields.some(
+      ({ label, value }) => labelMatches(label, marker) && hasSubstantiveValue(value),
+    );
+  });
 }
 
 function escapeRegExp(value: string): string {
@@ -244,15 +390,41 @@ function escapeRegExp(value: string): string {
 
 function scoreFor(text: string, category: string): number | undefined {
   const escaped = escapeRegExp(category);
-  const patterns = [
-    new RegExp(`${escaped}[^\\n]*?after\\s*[:=]?\\s*([0-3](?:\\.\\d+)?)`),
-    new RegExp(`${escaped}\\s*[:=-]\\s*([0-3](?:\\.\\d+)?)`),
-  ];
-  for (const pattern of patterns) {
-    const match = pattern.exec(text);
-    if (match) return Number.parseFloat(match[1]!);
-  }
-  return undefined;
+  const lines = [...text.matchAll(new RegExp(
+    `^\\s*(?:[-*]\\s*)?(?:\\*\\*)?${escaped}(?:\\*\\*)?\\s*([^\\n]*)$`,
+    "gm",
+  ))];
+  if (lines.length !== 1) return undefined;
+  const tail = lines[0]![1] ?? "";
+  const number =
+    "([-+]?(?:\\d+(?:\\.\\d+)?|\\.\\d+))(?:\\s*\\/\\s*3)?(?![\\dea-z_\\/])";
+  const after = new RegExp(`\\bafter\\s*[:=]?\\s*${number}`).exec(tail);
+  const direct = new RegExp(`^\\s*[:=|/-]\\s*${number}`).exec(tail);
+  const match = after ?? direct;
+  if (!match) return undefined;
+  const remainder = tail.slice(match.index + match[0].length).trim();
+  if (remainder && !/^(?:[.!;,]|[—–-]|\||\))/.test(remainder)) return undefined;
+  const parsed = Number.parseFloat(match[1]!);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function hasPassingStatus(text: string, pattern: RegExp): boolean {
+  const matches = [...text.matchAll(new RegExp(
+    pattern.source,
+    pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`,
+  ))];
+  if (matches.length !== 1) return false;
+  const value = matches[0]?.[1]?.trim();
+  return value !== undefined && (
+    LEADING_PASS_STATUS.test(value) || TRAILING_PASS_STATUS.test(value)
+  );
+}
+
+function fieldValues(text: string, pattern: RegExp): string[] {
+  return [...text.matchAll(new RegExp(
+    pattern.source,
+    pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`,
+  ))].map((match) => match[1]!.trim());
 }
 
 function isFile(path: string): boolean {
@@ -264,25 +436,25 @@ function isFile(path: string): boolean {
 }
 
 export function auditReport(rawText: string, options: Options): string[] {
-  const text = normalize(rawText);
-  const missing = missingMarkers(text, [...BASE_REQUIRED, ...TECHNICAL_REQUIRED]);
-  if (!options.noDesign) missing.push(...missingMarkers(text, DESIGN_REQUIRED));
-  if (options.physics) missing.push(...missingMarkers(text, PHYSICS_REQUIRED));
-  if (options.audio) missing.push(...missingMarkers(text, AUDIO_REQUIRED));
-  if (options.difficulty) missing.push(...missingMarkers(text, DIFFICULTY_REQUIRED));
+  const text = normalize(maskNonEvidenceMarkdown(rawText));
+  const missing = missingEvidence(text, [...BASE_REQUIRED, ...TECHNICAL_REQUIRED]);
+  if (!options.noDesign) missing.push(...missingEvidence(text, DESIGN_REQUIRED));
+  if (options.physics) missing.push(...missingEvidence(text, PHYSICS_REQUIRED));
+  if (options.audio) missing.push(...missingEvidence(text, AUDIO_REQUIRED));
+  if (options.difficulty) missing.push(...missingEvidence(text, DIFFICULTY_REQUIRED));
 
-  const semanticFailures = [...PASS_PATTERNS]
-    .filter(([, pattern]) => !pattern.test(text))
+  const semanticFailures = [...RESULT_FIELDS]
+    .filter(([, pattern]) => !hasPassingStatus(text, pattern))
     .map(([label]) => label);
 
-  const sourceMatch = CONTENT_SOURCE_PATTERN.exec(text);
-  if (!sourceMatch) {
+  const contentSourceValues = fieldValues(text, CONTENT_SOURCE_PATTERN);
+  if (contentSourceValues.length !== 1) {
     semanticFailures.push(
-      "local content sources must list procedural, project-local, user-supplied, and/or deferred",
+      `local content sources must appear exactly once: found ${contentSourceValues.length}`,
     );
   } else {
     const sourceValues = new Set(
-      sourceMatch[1]!
+      contentSourceValues[0]!
         .split(",")
         .map((value) => value.trim())
         .filter(Boolean),
@@ -299,6 +471,23 @@ export function auditReport(rawText: string, options: Options): string[] {
     }
   }
 
+  const desktopMobileValues = fieldValues(text, DESKTOP_MOBILE_PATTERN);
+  if (desktopMobileValues.length !== 1) {
+    semanticFailures.push(
+      `desktop/mobile must appear exactly once: found ${desktopMobileValues.length}`,
+    );
+  } else {
+    const value = desktopMobileValues[0]!;
+    if (/^not applicable\b/i.test(value)) {
+      const waiver = /^not applicable\s*(?:—|–|-)\s*desktop-only\s+(.+)$/i.exec(value);
+      if (!waiver || /^(?:reason|explanation|tbd|todo)[.!]?$/i.test(waiver[1]!.trim())) {
+        semanticFailures.push(
+          "desktop/mobile waiver must be 'not applicable — desktop-only <specific reason>'",
+        );
+      }
+    }
+  }
+
   const scoreFailures: string[] = [];
   const visualClaim = options.polished || options.premium || options.showcase;
   const scoredClaim = options.premium || options.showcase;
@@ -309,10 +498,14 @@ export function auditReport(rawText: string, options: Options): string[] {
       : options.showcase
         ? "showcase"
         : undefined;
-  const tierMatch = CLAIM_TIER_PATTERN.exec(text);
-  const reportedTier = tierMatch?.[1]?.trim();
+  const tierValues = fieldValues(text, CLAIM_TIER_PATTERN);
+  const reportedTier = tierValues.length === 1 ? tierValues[0] : undefined;
 
-  if (reportedTier !== undefined && !ALLOWED_CLAIM_TIERS.has(reportedTier)) {
+  if (tierValues.length !== 1) {
+    semanticFailures.push(
+      `claim tier must appear exactly once: found ${tierValues.length}`,
+    );
+  } else if (!ALLOWED_CLAIM_TIERS.has(reportedTier!)) {
     semanticFailures.push(
       `invalid claim tier: ${reportedTier}; expected none, polished, premium, or showcase`,
     );
@@ -330,9 +523,9 @@ export function auditReport(rawText: string, options: Options): string[] {
     );
   }
 
-  if (visualClaim) missing.push(...missingMarkers(text, POLISHED_REQUIRED));
+  if (visualClaim) missing.push(...missingEvidence(text, POLISHED_REQUIRED));
   if (scoredClaim) {
-    missing.push(...missingMarkers(text, PREMIUM_REQUIRED));
+    missing.push(...missingEvidence(text, PREMIUM_REQUIRED));
     const scores: number[] = [];
     for (const category of PREMIUM_CATEGORIES) {
       const score = scoreFor(text, category);
@@ -364,9 +557,20 @@ export function auditReport(rawText: string, options: Options): string[] {
     }
   }
 
+  const automaticFailureValues = fieldValues(text, AUTOMATIC_FAILURES_PATTERN);
+  if (visualClaim && automaticFailureValues.length !== 1) {
+    scoreFailures.push(
+      `automatic failures remaining must appear exactly once: found ${automaticFailureValues.length}`,
+    );
+  } else if (!visualClaim && automaticFailureValues.length > 1) {
+    scoreFailures.push(
+      `automatic failures remaining must not be duplicated: found ${automaticFailureValues.length}`,
+    );
+  }
   if (
     visualClaim &&
-    !/automatic failures remaining\s*[:=-]\s*(?:none|0)\b/.test(text)
+    automaticFailureValues.length === 1 &&
+    !/^(?:none|0)\s*[.!]?$/.test(automaticFailureValues[0]!)
   ) {
     scoreFailures.push("automatic failures remaining must be none or 0");
   }
@@ -393,6 +597,11 @@ export function main(argv = process.argv.slice(2)): number {
   return 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+const invokedAsMain = Boolean(
+  process.argv[1] &&
+  existsSync(resolve(process.argv[1])) &&
+  realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)),
+);
+if (invokedAsMain) {
   process.exitCode = main();
 }

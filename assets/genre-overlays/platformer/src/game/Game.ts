@@ -8,15 +8,42 @@ import { CameraRig } from '../systems/CameraRig';
 import { DebugTools, type DebugTuning } from '../systems/DebugTools';
 import { Hud, type GameState } from '../systems/Hud';
 import { disposeObject3D } from '../utils/dispose';
+import { InterpolatedTransform } from '../utils/InterpolatedTransform';
 import { createSeededRandom } from '../utils/random';
 
+const ENABLE_GAME_DIAGNOSTICS =
+  import.meta.env.DEV || import.meta.env.VITE_ENABLE_GAME_DIAGNOSTICS === 'true';
 const TARGET_SCORE = 1;
 const TIME_LIMIT_SECONDS = 120;
 const GRAVITY = -28;
 const JUMP_VELOCITY = 10.5;
+const COYOTE_TIME_SECONDS = 0.1;
+const JUMP_BUFFER_SECONDS = 0.12;
+const LANDING_SLOP = 0.08;
 const PLAYER_RADIUS = 0.45;
 const FALL_KILL_Y = -4;
 const MOVE_SPEED = 6.2;
+
+function getToneMappingName(toneMapping: THREE.ToneMapping): string {
+  switch (toneMapping) {
+    case THREE.NoToneMapping:
+      return 'NoToneMapping';
+    case THREE.LinearToneMapping:
+      return 'LinearToneMapping';
+    case THREE.ReinhardToneMapping:
+      return 'ReinhardToneMapping';
+    case THREE.CineonToneMapping:
+      return 'CineonToneMapping';
+    case THREE.ACESFilmicToneMapping:
+      return 'ACESFilmicToneMapping';
+    case THREE.CustomToneMapping:
+      return 'CustomToneMapping';
+    case THREE.AgXToneMapping:
+      return 'AgXToneMapping';
+    case THREE.NeutralToneMapping:
+      return 'NeutralToneMapping';
+  }
+}
 
 type Platform = {
   mesh: THREE.Mesh;
@@ -33,14 +60,17 @@ export class Game {
   private readonly camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
   private readonly input: InputController;
   private readonly player = new Player();
+  private readonly playerPresentation = new InterpolatedTransform(this.player.group);
   private readonly platforms: Platform[] = [];
   private readonly audio = new AudioSystem();
   private readonly hud = new Hud();
-  private readonly cameraRig = new CameraRig(this.camera, new THREE.Vector3(0, 6.5, -11));
+  private readonly cameraRig = new CameraRig(this.camera, new THREE.Vector3(0, 6.5, 11));
   private readonly loop: Loop;
   private readonly tuning: DebugTuning = {
     speed: MOVE_SPEED,
-    dashMultiplier: 1.15,
+    // The scaffold reserves this field for its generic action. Platformer speed
+    // is intentionally independent from the jump button.
+    dashMultiplier: 1,
     acceleration: 16,
     cameraLag: 0.13,
     exposure: 1.05,
@@ -76,7 +106,9 @@ export class Game {
   private resumeAfterContextRestore = false;
   private verticalVelocity = 0;
   private onGround = false;
-  private dashWasHeld = false;
+  private jumpWasHeld = false;
+  private coyoteTimeRemaining = 0;
+  private jumpBufferRemaining = 0;
   private flagReached = false;
 
   private readonly onContextLost = (event: Event) => {
@@ -135,7 +167,37 @@ export class Game {
     this.arena = this.createScene();
     this.resetRun();
     resizeRenderer(this.renderer, this.camera, this.tuning.maxDpr);
-    this.installTestHooks();
+    if (ENABLE_GAME_DIAGNOSTICS) {
+      window.__THREE_GAME_TEST_HOOKS__ = {
+        seed: (value: number) => {
+          this.rng = createSeededRandom(value);
+          return true;
+        },
+        setState: (name: string) => {
+          if (name === 'active-play') this.resetRun();
+          else if (name === 'complete') this.completeRun();
+          else if (name === 'failed') this.failRun();
+          else if (name === 'paused') {
+            this.resetRun();
+            this.state = 'paused';
+            this.syncHud();
+          } else {
+            console.warn(`Unknown test state: ${name}`);
+            return false;
+          }
+          return true;
+        },
+        setPausedForScreenshot: (paused: boolean) => {
+          this.pausedForScreenshot = paused;
+        },
+        setReducedMotion: (enabled: boolean) => {
+          this.reducedMotion = enabled;
+        },
+        hideDebugUi: (hidden: boolean) => {
+          this.debugTools.setHidden(hidden);
+        },
+      };
+    }
     document.querySelector('#app')?.append(this.rendererStatus);
     canvas.addEventListener('webglcontextlost', this.onContextLost);
     canvas.addEventListener('webglcontextrestored', this.onContextRestored);
@@ -160,8 +222,10 @@ export class Game {
     disposeObject3D(this.flag);
     this.sun.dispose();
     this.renderer.dispose();
-    window.__THREE_GAME_DIAGNOSTICS__ = undefined;
-    window.__THREE_GAME_TEST_HOOKS__ = undefined;
+    if (ENABLE_GAME_DIAGNOSTICS) {
+      delete window.__THREE_GAME_DIAGNOSTICS__;
+      delete window.__THREE_GAME_TEST_HOOKS__;
+    }
   }
 
   private update(delta: number): boolean {
@@ -207,38 +271,53 @@ export class Game {
   }
 
   private updatePlatformerPlayer(delta: number, elapsed: number): void {
+    this.playerPresentation.beginStep();
     this.input.readMovement(this.move);
-    const dash = this.input.isDashHeld();
-    const speed = this.tuning.speed * (dash && this.onGround ? this.tuning.dashMultiplier : 1);
-    const targetX = this.move.x * speed;
-    const targetZ = -this.move.y * speed;
+    const jumpHeld = this.input.isDashHeld();
+    if (jumpHeld && !this.jumpWasHeld) this.jumpBufferRemaining = JUMP_BUFFER_SECONDS;
+    else this.jumpBufferRemaining = Math.max(0, this.jumpBufferRemaining - delta);
+    this.jumpWasHeld = jumpHeld;
+
+    this.coyoteTimeRemaining = this.onGround
+      ? COYOTE_TIME_SECONDS
+      : Math.max(0, this.coyoteTimeRemaining - delta);
+
+    const targetX = this.move.x * this.tuning.speed;
+    const targetZ = this.move.y * this.tuning.speed;
     const smoothing = 1 - Math.exp(-this.tuning.acceleration * delta);
     this.player.velocity.x = THREE.MathUtils.lerp(this.player.velocity.x, targetX, smoothing);
     this.player.velocity.z = THREE.MathUtils.lerp(this.player.velocity.z, targetZ, smoothing);
 
-    if (dash && !this.dashWasHeld && this.onGround) {
+    if (this.jumpBufferRemaining > 0 && this.coyoteTimeRemaining > 0) {
       this.verticalVelocity = JUMP_VELOCITY;
       this.onGround = false;
+      this.coyoteTimeRemaining = 0;
+      this.jumpBufferRemaining = 0;
     }
-    this.dashWasHeld = dash;
 
+    const previousFeetY = this.player.group.position.y;
     this.verticalVelocity += GRAVITY * delta;
     this.player.group.position.x += this.player.velocity.x * delta;
     this.player.group.position.z += this.player.velocity.z * delta;
     this.player.group.position.y += this.verticalVelocity * delta;
 
-    this.resolvePlatformCollision();
+    this.resolvePlatformCollision(previousFeetY);
 
-    if (this.player.velocity.lengthSq() > 0.05) {
-      this.player.group.rotation.y = Math.atan2(this.player.velocity.x, -this.player.velocity.z);
+    const horizontalSpeedSq =
+      this.player.velocity.x * this.player.velocity.x +
+      this.player.velocity.z * this.player.velocity.z;
+    if (horizontalSpeedSq > 0.05) {
+      // Player art faces local -Z. Negating X keeps rightward travel facing +X.
+      this.player.group.rotation.y = Math.atan2(-this.player.velocity.x, -this.player.velocity.z);
     }
     if (this.onGround && !this.reducedMotion) {
       this.player.group.position.y += Math.sin(elapsed * 8) * 0.01;
     }
     this.player.velocity.y = this.verticalVelocity;
+    this.playerPresentation.endStep();
   }
 
-  private resolvePlatformCollision(): void {
+  private resolvePlatformCollision(previousFeetY: number): void {
     const feetY = this.player.group.position.y;
     const bodyX = this.player.group.position.x;
     const bodyZ = this.player.group.position.z;
@@ -251,8 +330,7 @@ export class Game {
       const withinZ = bodyZ >= platform.minZ - PLAYER_RADIUS && bodyZ <= platform.maxZ + PLAYER_RADIUS;
       if (!withinX || !withinZ) continue;
 
-      const previousFeet = feetY - this.verticalVelocity * (1 / 60);
-      if (previousFeet >= platform.topY - 0.2 && feetY <= platform.topY + 0.15) {
+      if (previousFeetY >= platform.topY - LANDING_SLOP && feetY <= platform.topY) {
         this.player.group.position.y = platform.topY;
         this.verticalVelocity = 0;
         this.onGround = true;
@@ -269,11 +347,57 @@ export class Game {
     return dx * dx + dz * dz < 1.1 * 1.1 && Math.abs(dy) < 2.2;
   }
 
-  private render(_alpha: number): void {
-    this.cameraRig.present(_alpha);
+  private render(alpha: number): void {
+    this.playerPresentation.present(alpha);
+    this.cameraRig.present(alpha);
     resizeRenderer(this.renderer, this.camera, this.tuning.maxDpr);
     this.renderer.render(this.scene, this.camera);
-    this.publishDiagnostics();
+    if (ENABLE_GAME_DIAGNOSTICS) {
+      const info = this.renderer.info;
+      const dpr = this.renderer.getPixelRatio();
+      const toneMappingName = getToneMappingName(this.renderer.toneMapping);
+
+      window.__THREE_GAME_DIAGNOSTICS__ = {
+        frame: this.frame,
+        elapsed: this.elapsed,
+        timeRemaining: Math.max(0, TIME_LIMIT_SECONDS - this.elapsed),
+        state: this.state,
+        score: this.score,
+        targetScore: TARGET_SCORE,
+        complete: this.state === 'won',
+        hazards: 0,
+        player: {
+          position: {
+            x: this.player.group.position.x,
+            y: this.player.group.position.y,
+            z: this.player.group.position.z,
+          },
+          speed: this.player.velocity.length(),
+        },
+        renderer: {
+          revision: THREE.REVISION,
+          type: 'WebGLRenderer',
+          backend: 'webgl',
+          toneMapping: toneMappingName,
+          toneMappingExposure: this.renderer.toneMappingExposure,
+          calls: info.render.calls,
+          triangles: info.render.triangles,
+          geometries: info.memory.geometries,
+          textures: info.memory.textures,
+          dpr,
+        },
+        camera: {
+          aspect: this.camera.aspect,
+        },
+        canvas: {
+          clientWidth: this.canvas.clientWidth,
+          clientHeight: this.canvas.clientHeight,
+          width: this.canvas.width,
+          height: this.canvas.height,
+          dpr,
+        },
+      };
+    }
   }
 
   private createScene(): THREE.Group {
@@ -304,12 +428,14 @@ export class Game {
 
   private createPlatforms(arena: THREE.Group): void {
     const specs: Array<{ x: number; y: number; z: number; w: number; d: number; accent?: boolean }> = [
-      { x: 0, y: 0, z: 0, w: 6, d: 5 },
-      { x: 0.5, y: 0.4, z: 7, w: 4.2, d: 3.2 },
-      { x: -1.2, y: 1.1, z: 13, w: 3.6, d: 3 },
-      { x: 1.4, y: 1.8, z: 19, w: 3.4, d: 2.8 },
-      { x: -0.6, y: 2.4, z: 25, w: 3.8, d: 3 },
-      { x: 0.2, y: 3.0, z: 32, w: 4.5, d: 4, accent: true },
+      // Give first-time touch players enough runway to learn steering,
+      // release the stick, and queue a jump without drifting off spawn.
+      { x: 0, y: 0, z: 0, w: 9, d: 7 },
+      { x: 0.5, y: 0.4, z: -7, w: 4.2, d: 3.2 },
+      { x: -1.2, y: 1.1, z: -13, w: 3.6, d: 3 },
+      { x: 1.4, y: 1.8, z: -19, w: 3.4, d: 2.8 },
+      { x: -0.6, y: 2.4, z: -25, w: 3.8, d: 3 },
+      { x: 0.2, y: 3.0, z: -32, w: 4.5, d: 4, accent: true },
     ];
 
     for (const spec of specs) {
@@ -355,34 +481,7 @@ export class Game {
     this.flag.add(banner);
 
     const last = this.platforms[this.platforms.length - 1]!;
-    this.flag.position.set((last.minX + last.maxX) / 2, last.topY, (last.minZ + last.maxZ) / 2 + 0.4);
-  }
-
-  private installTestHooks(): void {
-    window.__THREE_GAME_TEST_HOOKS__ = {
-      seed: (value: number) => {
-        this.rng = createSeededRandom(value);
-      },
-      setState: (name: string) => {
-        if (name === 'active-play') this.resetRun();
-        else if (name === 'complete') this.completeRun();
-        else if (name === 'failed') this.failRun();
-        else if (name === 'paused') {
-          this.resetRun();
-          this.state = 'paused';
-          this.syncHud();
-        } else console.warn(`Unknown test state: ${name}`);
-      },
-      setPausedForScreenshot: (paused: boolean) => {
-        this.pausedForScreenshot = paused;
-      },
-      setReducedMotion: (enabled: boolean) => {
-        this.reducedMotion = enabled;
-      },
-      hideDebugUi: (hidden: boolean) => {
-        this.debugTools.setHidden(hidden);
-      },
-    };
+    this.flag.position.set((last.minX + last.maxX) / 2, last.topY, (last.minZ + last.maxZ) / 2 - 0.4);
   }
 
   private resetRun(): void {
@@ -391,17 +490,21 @@ export class Game {
     this.state = 'playing';
     this.verticalVelocity = 0;
     this.onGround = true;
-    this.dashWasHeld = false;
+    this.jumpWasHeld = false;
+    this.coyoteTimeRemaining = COYOTE_TIME_SECONDS;
+    this.jumpBufferRemaining = 0;
     this.flagReached = false;
     this.player.reset();
     const spawnJitter = (this.rng() - 0.5) * 0.4;
     this.player.group.position.set(spawnJitter, this.platforms[0]?.topY ?? 0, 0);
     this.player.velocity.set(0, 0, 0);
+    this.playerPresentation.snap();
     this.cameraRig.snapTo(this.player.group.position);
     this.syncHud();
   }
 
   private holdPresentation(): void {
+    this.playerPresentation.hold();
     this.cameraRig.holdPresentation();
   }
 
@@ -412,6 +515,7 @@ export class Game {
     this.score = TARGET_SCORE;
     this.flagReached = true;
     this.state = 'won';
+    this.playerPresentation.snap();
     this.cameraRig.snapTo(this.player.group.position);
     this.syncHud();
   }
@@ -420,63 +524,13 @@ export class Game {
     this.resetRun();
     this.player.group.position.y = FALL_KILL_Y - 0.5;
     this.state = 'lost';
+    this.playerPresentation.snap();
+    this.cameraRig.snapTo(this.player.group.position);
     this.syncHud();
   }
 
   private syncHud(): void {
     this.hud.update(this.score, TARGET_SCORE, this.elapsed, TIME_LIMIT_SECONDS, this.state);
-  }
-
-  private publishDiagnostics(): void {
-    const info = this.renderer.info;
-    const dpr = this.renderer.getPixelRatio();
-    const toneMappingName =
-      Object.entries(THREE)
-        .find(
-          ([key, value]) =>
-            key.endsWith('ToneMapping') && value === this.renderer.toneMapping,
-        )?.[0] ?? String(this.renderer.toneMapping);
-
-    window.__THREE_GAME_DIAGNOSTICS__ = {
-      frame: this.frame,
-      elapsed: this.elapsed,
-      timeRemaining: Math.max(0, TIME_LIMIT_SECONDS - this.elapsed),
-      state: this.state,
-      score: this.score,
-      targetScore: TARGET_SCORE,
-      complete: this.state === 'won',
-      hazards: 0,
-      player: {
-        position: {
-          x: this.player.group.position.x,
-          y: this.player.group.position.y,
-          z: this.player.group.position.z,
-        },
-        speed: this.player.velocity.length(),
-      },
-      renderer: {
-        revision: THREE.REVISION,
-        type: this.renderer.constructor.name,
-        backend: 'webgl',
-        toneMapping: toneMappingName,
-        toneMappingExposure: this.renderer.toneMappingExposure,
-        calls: info.render.calls,
-        triangles: info.render.triangles,
-        geometries: info.memory.geometries,
-        textures: info.memory.textures,
-        dpr,
-      },
-      camera: {
-        aspect: this.camera.aspect,
-      },
-      canvas: {
-        clientWidth: this.canvas.clientWidth,
-        clientHeight: this.canvas.clientHeight,
-        width: this.canvas.width,
-        height: this.canvas.height,
-        dpr,
-      },
-    };
   }
 
   private getElement<T extends HTMLElement = HTMLElement>(selector: string): T {

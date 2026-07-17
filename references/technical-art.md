@@ -2,7 +2,7 @@
 
 ## Contents
 
-- Technical-art brief and render budgets
+- Technical-art brief, render budgets, and current renderer diagnostics
 - Material/shader and VFX systems
 - Instancing, batching, LOD, culling, adaptive quality, and cleanup
 - Surface detail, readability, and reporting
@@ -18,10 +18,14 @@ and the chosen WebGL or WebGPU budget.
 
 Primary Three.js references: [WebGLRenderer.info](https://threejs.org/docs/pages/WebGLRenderer.html),
 [common Renderer Info](https://threejs.org/docs/pages/Info.html),
+[common Renderer](https://threejs.org/docs/pages/Renderer.html),
+[InspectorBase](https://threejs.org/docs/pages/InspectorBase.html),
 [InstancedMesh](https://threejs.org/docs/pages/InstancedMesh.html),
 [BatchedMesh](https://threejs.org/docs/pages/BatchedMesh.html),
 [LOD](https://threejs.org/docs/pages/LOD.html), and
-[KTX2Loader](https://threejs.org/docs/pages/KTX2Loader.html).
+[KTX2Loader](https://threejs.org/docs/pages/KTX2Loader.html). See also
+[Timer](https://threejs.org/docs/pages/Timer.html) and
+[RenderTarget](https://threejs.org/docs/pages/RenderTarget.html).
 
 ## Technical Art Brief (Broad Visual Work)
 
@@ -57,8 +61,11 @@ and reports over-budget rows. In a non-scaffold project, capture equivalent
 | Texture memory (est.) | <= 256 MB | <= 128 MB |
 | Shadow-casting lights | <= 2 | 1 |
 | Shadow map size | <= 2048 | <= 1024 |
+| Simultaneous transient point lights (no shadows) | <= 2 | 0-1 |
+| CPU transparent VFX particles/sprites in the worst burst | <= 2,000 | <= 500-800 |
+| Concurrent VFX emitters | <= 16 | <= 8 |
 | DPR cap | 1.5-2 | 1-1.5 |
-| Maximum drawing-buffer pixels | about 2.1M (1920x1080) | about 0.9-1.3M, measured |
+| Maximum drawing-buffer pixels | about 2.1M (for example 1920x1080 physical) | about 0.9-1.3M, measured |
 | Post passes (beyond render+output) | <= 2 | 0-1 |
 
 How to spend within them:
@@ -66,16 +73,77 @@ How to spend within them:
 - Draw calls: repeated world/detail pieces should be instanced or merged by material.
 - Triangles: spend on silhouettes near the camera; reduce background detail through LOD, impostors, or simplified meshes.
 - Materials: share material roles aggressively. Unique material count often grows faster than geometry count.
-- Textures: keep opaque large images compressed or small; avoid unique 2K+ textures for tiny repeated props.
+- Textures: use GPU-compressed KTX2 (often carrying Basis Universal data)
+  and/or smaller dimensions. PNG, JPEG, or AVIF can reduce transfer size but
+  normally upload decoded texels and do not by themselves reduce GPU residency.
+  Avoid unique 2K+ maps for tiny repeated props.
 - Shadows: reserve real shadows for hero objects and grounding anchors; use
   blob/contact meshes for small repeated props (see `shaders.md`).
+- Point lights: prefer emissive sprites/meshes for repeated flashes. Pool the
+  few transient point lights that visibly affect nearby surfaces, use tight
+  distances, and keep their shadows off; each shadow-casting point light needs
+  six shadow directions.
+- VFX: transparent particle count is only a proxy. Also measure screen
+  coverage, overdraw, emitters, transient lights, draw calls, and the same
+  event-burst frame-time percentiles. GPU compute can raise simulation count
+  without raising the fill-rate or readability budget.
 - Post: every pass must earn its cost and preserve interaction clarity; concrete
   chain settings are in `shaders.md`.
 
 Always report actual renderer diagnostics after the graphics pass: renderer
 class/actual backend, draw calls using the correct info shape, triangles,
 geometries, textures, material count if available, post passes, shadow
-settings, actual drawing-buffer size/pixels, DPR, and bottlenecks.
+settings, transient light/VFX peaks, actual drawing-buffer size/pixels, DPR,
+frame-time p50/p95/p99 after warm-up, sample duration/device/browser, and
+bottlenecks.
+
+Drawing-buffer pixels are physical render pixels, not CSS pixels. A 1920x1080
+CSS canvas at DPR 2 is about 8.3M pixels, not 2.1M. Enforce both a DPR cap and a
+pixel cap, then record `renderer.getDrawingBufferSize(target)` after resize; it
+already reflects the active pixel ratio.
+
+```ts
+function resizeWithinBudget(
+  renderer: THREE.WebGLRenderer,
+  cssWidth: number,
+  cssHeight: number,
+  dprCap: number,
+  maxPixels: number,
+) {
+  const pixelDprCap = Math.sqrt(
+    maxPixels / Math.max(1, cssWidth * cssHeight),
+  );
+  renderer.setPixelRatio(Math.min(devicePixelRatio, dprCap, pixelDprCap));
+  renderer.setSize(cssWidth, cssHeight, false);
+}
+```
+
+The example uses the `WebGLRenderer` type; common Renderer exposes equivalent
+pixel-ratio and sizing methods.
+
+## Read Current Renderer Diagnostics Correctly
+
+Use the info shape for the renderer actually running:
+
+- `WebGLRenderer.info.render.calls` is the draw-call count; also capture
+  `triangles`, `points`, and `lines`. `memory.geometries` and
+  `memory.textures` are counts, while `programs.length` is the active program
+  count. WebGL info does not provide authoritative byte totals.
+- The common `Renderer.info` used by WebGPU/common backends reports
+  `render.drawCalls`, `render.frameCalls`, primitive counts, and
+  `compute.frameCalls`. Its memory record includes counts plus
+  `attributesSize`, `indexAttributesSize`, `indirectStorageAttributesSize`,
+  `storageAttributesSize`, `uniformBuffersSize`, `programsSize`,
+  `readbackBuffersSize`, `texturesSize`, `renderTargets`, and `total`.
+- When supported and timestamp tracking is enabled, common info exposes
+  `render.timestamp` and `compute.timestamp` GPU durations in milliseconds.
+  These can arrive asynchronously. Do not rename requestAnimationFrame delta,
+  FPS, or CPU wall time as GPU time.
+
+For common Renderer/WebGPU investigation, attach an `InspectorBase`-derived
+inspector such as the official Inspector addon through `renderer.inspector`.
+Use its GPU timeline only when timestamp queries are available; keep CPU frame
+timing and GPU timing labeled separately.
 
 For a multi-pass WebGL frame, prevent `renderer.info` from resetting at every
 pass and take the snapshot after the full frame:
@@ -99,7 +167,15 @@ For an uncompressed 2D RGBA8 texture, use roughly
 `width * height * 4 * 4/3` bytes with a complete mip chain. Cube maps multiply
 by six; array/3D textures multiply by layers/depth; half-float RGBA is roughly
 eight bytes per texel; block-compressed GPU formats need format-specific math.
-Browser and driver allocations still vary, so label the number an estimate.
+For the common Renderer, `info.memory.texturesSize` and `memory.total` are useful
+accounting estimates, not driver allocations; compressed-texture accounting may
+be incomplete. Browser and driver allocations still vary, so label every byte
+number an estimate.
+
+Count render-target residency separately: color attachments, depth/stencil,
+MSAA samples, and mip levels all cost memory. Post-processing commonly keeps
+two ping-pong targets plus history buffers, while shadow maps are depth render
+targets. Budget the peak set that can coexist, not the encoded asset-file size.
 
 ## Material And Shader System
 
@@ -176,7 +252,7 @@ Pool effects and reuse geometries/materials. Permanent particle fields must stay
 | --- | --- | --- |
 | Separate `Mesh` objects | Few objects, unique materials/behavior | Most flexible, most draw calls |
 | Merged `BufferGeometry` | Static geometry, one material, no per-object identity | Cheap submission, hard to update/cull individually |
-| `InstancedMesh` | Same geometry and material, many transforms/colors | One draw call family; per-instance data only |
+| `InstancedMesh` | Same geometry and material, many transforms/colors | Usually one submission per geometry/material draw group; per-instance data only |
 | `BatchedMesh` | Different geometries sharing a material | Multi-draw batch with capacity planning |
 | `LOD` | One object needs distance variants | More asset variants and transition tuning |
 
@@ -191,6 +267,10 @@ Use instancing for many copies with the same geometry/material and different tra
 Rules:
 
 - Update `instanceMatrix.needsUpdate` and `instanceColor.needsUpdate` only after batched changes.
+- After `setMorphAt()`, update `morphTexture.needsUpdate` after the batch of
+  edits. Call `InstancedMesh.dispose()` at owner teardown so its morph texture
+  and instance-specific GPU state are released; geometry and material still
+  follow their own ownership policy.
 - Compute or update bounds for instanced groups when transforms change materially.
 - Do not instance everything blindly. Different materials or constantly changing transforms can erase the win.
 - Keep collision separate from instanced visual detail.
@@ -234,10 +314,16 @@ batch.computeBoundingSphere();
 scene.add(batch);
 ```
 
-Plan capacity from content counts and geometry sizes. Use per-instance
-visibility for pooled objects and call `optimize()` only at an intentional
-maintenance/loading boundary, not during active play. `batch.dispose()` frees
-its GPU buffers; keep ownership of source geometries/materials explicit.
+Plan capacity from content counts and geometry sizes. Negative-scale matrices
+are unsupported. `perObjectFrustumCulled` and `sortObjects` default to `true`;
+disable them only after measurement, and use `setCustomSort()` when the default
+ordering does not match the material. Use per-instance visibility for pooled
+objects and call `optimize()` only at an intentional maintenance/loading
+boundary, not during active play. `setInstanceCount()` and `setGeometrySize()`
+can resize planned capacity, but shrinking fails while active IDs/ranges exceed
+the new limits. `batch.dispose()` frees its internal packed geometry and GPU
+textures; source geometries passed to `addGeometry()` and the shared material
+remain separately owned.
 
 Use LOD when:
 
@@ -277,28 +363,50 @@ class FrameBudgetController {
   private slowWindows = 0;
   private fastWindows = 0;
 
-  push(frameSeconds: number): 'lower' | 'raise' | null {
-    this.samples.push(Math.min(frameSeconds, 0.25));
+  constructor(private readonly budgetSeconds = 1 / 60) {}
+
+  push(sampleSeconds: number, isVisible = true): 'lower' | 'raise' | null {
+    if (!isVisible || sampleSeconds <= 0 || sampleSeconds > 0.25) {
+      this.samples = [];
+      this.slowWindows = 0;
+      this.fastWindows = 0;
+      return null;
+    }
+    this.samples.push(sampleSeconds);
     if (this.samples.length < 120) return null;
 
     const sorted = [...this.samples].sort((a, b) => a - b);
     const p90 = sorted[Math.floor(sorted.length * 0.9)];
     this.samples = [];
 
-    this.slowWindows = p90 > 1 / 45 ? this.slowWindows + 1 : 0;
-    this.fastWindows = p90 < 1 / 70 ? this.fastWindows + 1 : 0;
+    this.slowWindows = p90 > this.budgetSeconds * 1.2
+      ? this.slowWindows + 1
+      : 0;
+    this.fastWindows = p90 <= this.budgetSeconds * 1.05
+      ? this.fastWindows + 1
+      : 0;
     if (this.slowWindows >= 2) {
       this.slowWindows = 0;
+      this.fastWindows = 0;
       return 'lower';
     }
     if (this.fastWindows >= 4) {
       this.fastWindows = 0;
+      this.slowWindows = 0;
       return 'raise';
     }
     return null;
   }
 }
 ```
+
+Choose `budgetSeconds` for the measurement being fed into the controller. For
+requestAnimationFrame cadence, use the declared target/display interval (for
+example `1 / 60`), not an impossible recovery threshold such as `1 / 70` on a
+60 Hz display. Prefer measured CPU render work or supported GPU timestamps with
+explicit headroom when those signals are available. Never feed a fixed
+simulation timestep. `THREE.Timer.connect(document)` uses Page Visibility to
+avoid background-tab spikes; also ignore hidden/warm-up/navigation samples.
 
 Apply one tier step at a time at a safe frame boundary. Lower DPR, shadow map
 size/update rate, post resolution/pass count, far effects, particles and LOD
@@ -317,6 +425,20 @@ For every project-owned or user-supplied GLB/FBX hero asset:
 - Verify PBR material readability under the game's lighting, not only in a model viewer.
 - Keep every runtime asset at a stable project path. Do not retain source-site
   handles, temporary locations, remote fallbacks, or non-local URLs.
+
+Verify cleanup as an ownership test, not a call-count ritual. Warm the renderer,
+record a steady-state baseline, then repeat the same load/play/unload cycle and
+confirm renderer counts and estimated bytes return to that baseline. Do not
+require every count to reach zero: Three.js can retain reusable internal
+background/environment resources. Continued growth across identical cycles is
+the failure signal.
+
+Scene traversal does not reach scene background/environment textures, render
+targets, composer passes, controls, PMREM generators, or decoder workers; merely
+visiting a render object also does not dispose its skeleton or
+`InstancedMesh`/`BatchedMesh` internals. Track these at the subsystem that
+created them, apply the ownership rules in `local-assets.md`, and reserve
+`renderer.dispose()` for renderer/application teardown.
 
 ## Decals, Trim, And Surface Detail
 
@@ -353,3 +475,10 @@ Report:
 - Remaining visual performance risks.
 - Renderer/backend and actual GPU/driver string when it can be probed; never
   assume headless means a specific renderer.
+
+For premium/showcase work, the report must show the iteration trail: baseline
+score/metrics, each targeted fix, and the recaptured score/metrics from the
+same deterministic states and worst-case event. Repeat score → fix → build and
+real-input replay → capture → measure until every applicable score and render
+budget threshold passes, or document the exact blocker. Do not use an older
+measurement to bless a newer visual pass.

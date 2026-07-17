@@ -5,7 +5,9 @@
 - Modeling principles and polished content floor
 - Hero vehicle and character recipes
 - Threat, reward, and world-kit recipes
-- Geometry, material, detail, and diagnostic rules
+- Geometry recipes and official constraints
+- Hard edges, UVs, materials, diagnostics, and disposal
+- Official documentation
 
 These recipes are for scratch-built Three.js models when procedural art is the
 chosen production method. The goal is not automatic photorealism; it is
@@ -53,8 +55,10 @@ Reject if the hero is mostly a box with two cylinders and a glow.
 
 This compact factory demonstrates the production contract: a custom silhouette,
 named functional parts, material roles, VFX sockets, a separate gameplay
-collider, and one disposal owner. Treat dimensions as metres and declare the
-game's forward axis before adapting it.
+collider, one boost cue, and one disposal owner. It is a foundation example,
+not the complete premium content floor above; add at least two more authored
+states such as damage and shield/selection. Treat dimensions as metres and
+declare the game's forward axis before adapting it.
 
 ```ts
 import * as THREE from 'three'
@@ -75,13 +79,15 @@ function taperedHullGeometry(): THREE.BufferGeometry {
     -0.30,  0.24, -1.20,   0.30,  0.24, -1.20,
     -0.62,  0.32,  0.55,   0.62,  0.32,  0.55,
   ])
+  // Counter-clockwise when viewed from outside. Reversing any triangle makes
+  // that face disappear with the default FrontSide material.
   const indices = [
-    0, 2, 1, 1, 2, 3,       // underside
-    4, 5, 6, 5, 7, 6,       // upper deck
-    0, 1, 4, 1, 5, 4,       // nose
-    2, 6, 3, 3, 6, 7,       // rear
-    0, 4, 2, 2, 4, 6,       // left side
-    1, 3, 5, 3, 7, 5,       // right side
+    0, 1, 2, 1, 3, 2,       // underside
+    4, 6, 5, 5, 6, 7,       // upper deck
+    0, 4, 1, 1, 4, 5,       // nose
+    2, 3, 6, 3, 7, 6,       // rear
+    0, 2, 4, 2, 6, 4,       // left side
+    1, 5, 3, 3, 5, 7,       // right side
   ]
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
@@ -98,12 +104,14 @@ export function createHovercraft(): HovercraftAsset {
 
   const body = new THREE.MeshStandardMaterial({
     color: 0x2d4b73,
-    metalness: 0.45,
+    metalness: 0,
     roughness: 0.32,
+    // The hull reuses eight vertices, so flat shading preserves hard panels.
+    flatShading: true,
   })
   const trim = new THREE.MeshStandardMaterial({
     color: 0xe9eef5,
-    metalness: 0.7,
+    metalness: 1,
     roughness: 0.24,
   })
   const glass = new THREE.MeshPhysicalMaterial({
@@ -115,10 +123,15 @@ export function createHovercraft(): HovercraftAsset {
   })
   const engine = new THREE.MeshStandardMaterial({
     color: 0x17202b,
+    metalness: 1,
+    roughness: 0.28,
+  })
+  const thrusterGlow = new THREE.MeshStandardMaterial({
+    color: 0x06131d,
     emissive: 0x27a8ff,
     emissiveIntensity: 0.8,
-    metalness: 0.65,
-    roughness: 0.28,
+    metalness: 0,
+    roughness: 0.5,
   })
 
   const hull = new THREE.Mesh(taperedHullGeometry(), body)
@@ -146,6 +159,16 @@ export function createHovercraft(): HovercraftAsset {
   rightEngine.position.x *= -1
   root.add(leftEngine, rightEngine)
 
+  // Restrict emissive energy to authored nozzle surfaces, not the whole engine.
+  const nozzleGlowGeometry = new THREE.CylinderGeometry(0.13, 0.13, 0.02, 16)
+  nozzleGlowGeometry.rotateX(Math.PI / 2)
+  for (const side of [-1, 1] as const) {
+    const nozzleGlow = new THREE.Mesh(nozzleGlowGeometry, thrusterGlow)
+    nozzleGlow.name = side < 0 ? 'leftNozzleGlow' : 'rightNozzleGlow'
+    nozzleGlow.position.set(side * 0.63, 0.02, 0.89)
+    root.add(nozzleGlow)
+  }
+
   const finGeometry = new THREE.BoxGeometry(0.08, 0.30, 0.72)
   for (const side of [-1, 1] as const) {
     const fin = new THREE.Mesh(finGeometry, trim)
@@ -163,7 +186,8 @@ export function createHovercraft(): HovercraftAsset {
   rightTrail.position.x *= -1
   root.add(leftTrail, rightTrail)
 
-  // Gameplay collision stays stable even when visual children animate.
+  // Gameplay collision stays stable even when visual children animate. This
+  // forgiving proxy intentionally excludes cosmetic fin tips.
   const collider = {
     center: new THREE.Vector3(0, 0.02, -0.18),
     halfExtents: new THREE.Vector3(0.72, 0.28, 1.02),
@@ -174,7 +198,7 @@ export function createHovercraft(): HovercraftAsset {
     collider,
     sockets: { leftTrail, rightTrail },
     setBoosting(active) {
-      engine.emissiveIntensity = active ? 3.2 : 0.8
+      thrusterGlow.emissiveIntensity = active ? 3.2 : 0.8
     },
     dispose() {
       const geometries = new Set<THREE.BufferGeometry>()
@@ -198,6 +222,21 @@ export function createHovercraft(): HovercraftAsset {
 If factories share a global geometry or material library, the library—not each
 asset instance—owns disposal. Add reference counting only when real dynamic
 loading makes simple scene-level ownership insufficient.
+
+The hull intentionally combines an indexed eight-vertex shape with
+`flatShading`. Shared indexed vertices otherwise average adjacent face normals
+and round off the panel edges. For selective smoothing, duplicate vertices at
+hard boundaries or use `toCreasedNormals()` from
+`three/addons/utils/BufferGeometryUtils.js`; it produces geometry with normals
+split at the chosen crease angle. It modifies a non-indexed input and converts
+an indexed input to a new non-indexed geometry, so clone first when ownership
+requires preserving the source. Keep smooth shading for truly curved parts.
+
+This hull does not need UVs because it uses solid colors. Before adding mapped
+paint, decals, or normal detail, author a matching `uv` attribute and duplicate
+vertices at UV seams. Tangent-space normal maps also need a valid UV/tangent
+basis; use the MikkTSpace tangent utility when matching a MikkTSpace-authored
+normal map.
 
 ## Hero Character Recipe
 
@@ -273,24 +312,158 @@ Reject if the world is mostly stretched boxes or a flat plane.
 
 ## Procedural Geometry Techniques
 
-- `ExtrudeGeometry`: panels, fins, wings, badges, UI/world glyphs, signs.
-- `LatheGeometry`: capsules, domes, engines, pipes, bottles, turret bases.
-- `TubeGeometry`: cables, rails, trails, conduits, curved weapons.
-- Custom `BufferGeometry`: tapered hulls, rocks, shards, wedges, low-poly terrain.
-- `ShapeGeometry`: decals, flat icons, trim strips, hazard markers.
-- `InstancedMesh`: windows, bolts, lane markers, debris, grass, lights, small props.
-- `LOD`: hero/background variants and dense prop reductions.
+Choose the constructor by topology and update rate, not only by silhouette:
 
-Use bevel-like layering when real bevel geometry is too expensive: duplicate thin trim meshes, edge strips, or slightly offset darker panels.
+| Tool | Strong uses | Important constraint |
+| --- | --- | --- |
+| `ExtrudeGeometry` | Panels, fins, wings, signs, thick glyphs | Extrudes a 2D `Shape`; beveling is unavailable when `extrudePath` is used |
+| `LatheGeometry` | Nozzles, domes, bottles, turret bases | Revolves `Vector2` profile points around Y; profile X values should be greater than zero |
+| `TubeGeometry` | Static cables, pipes, rails, curved weapons | Samples a curve at construction; changing the curve later does not update the geometry |
+| `ShapeGeometry` | Flat badges, icons, plates, hazard markers | Triangulates a planar shape; it does not project onto another mesh like a decal |
+| `DecalGeometry` addon | Projected scratches, markings, damage, paint | Samples base geometry into a world-space snapshot; deformed targets need an evaluated snapshot source |
+| Custom `BufferGeometry` | Hulls, rocks, shards, wedges, terrain | Winding, normals, UVs, bounds, and update ownership are the author’s responsibility |
+| `InstancedMesh` | Many copies of one geometry/material | Fixed instance capacity; active instances occupy a dense prefix |
+| `BatchedMesh` | Mixed compatible geometries sharing one material | Copies full geometry data; source groups, draw ranges, and morph data are not transferred |
+| `LOD` | Hero/background variants and prop reductions | All levels remain allocated; hysteresis is a fraction of the distance threshold |
+
+### Compact shape recipes
+
+Build a beveled plate from a closed XY profile. Keep bevel segments low on
+small or repeated parts:
+
+```ts
+const finProfile = new THREE.Shape()
+finProfile.moveTo(-0.48, -0.18)
+finProfile.lineTo(0.46, -0.10)
+finProfile.lineTo(0.18, 0.24)
+finProfile.lineTo(-0.38, 0.18)
+finProfile.closePath()
+
+const finGeometry = new THREE.ExtrudeGeometry(finProfile, {
+  depth: 0.06,
+  steps: 1,
+  bevelEnabled: true,
+  bevelSize: 0.018,
+  bevelThickness: 0.018,
+  bevelSegments: 2,
+})
+finGeometry.center()
+```
+
+Lathe a positive-X profile around Y, and sample a static curve into a cable:
+
+```ts
+const nozzleGeometry = new THREE.LatheGeometry([
+  new THREE.Vector2(0.11, -0.34),
+  new THREE.Vector2(0.18, -0.26),
+  new THREE.Vector2(0.22, 0.18),
+  new THREE.Vector2(0.15, 0.32),
+], 24)
+
+const cablePath = new THREE.CatmullRomCurve3([
+  new THREE.Vector3(-0.7, 0.4, 0.1),
+  new THREE.Vector3(-0.2, 0.2, 0.25),
+  new THREE.Vector3(0.35, 0.5, 0.15),
+  new THREE.Vector3(0.8, 0.3, -0.1),
+])
+const cableGeometry = new THREE.TubeGeometry(
+  cablePath,
+  40,   // tubular segments
+  0.025,
+  6,    // radial segments
+  false,
+)
+```
+
+For a cable, trail, rope, or ribbon that deforms every frame, allocate a custom
+buffer once and update its positions in batches. Rebuilding `TubeGeometry`
+every frame creates avoidable CPU work and garbage.
+
+Use the decal addon for markings that must conform to a target mesh:
+
+```ts
+import { DecalGeometry } from 'three/addons/geometries/DecalGeometry.js'
+
+function createDecal(
+  target: THREE.Mesh,
+  texture: THREE.Texture,
+  position: THREE.Vector3,
+  orientation: THREE.Euler,
+) {
+  target.updateWorldMatrix(true, false)
+  const geometry = new DecalGeometry(
+    target,
+    position,
+    orientation,
+    new THREE.Vector3(0.35, 0.35, 0.12),
+  )
+  const material = new THREE.MeshStandardMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -4,
+  })
+  const decal = new THREE.Mesh(geometry, material)
+
+  // DecalGeometry outputs world-space positions. Convert them to this rigid
+  // target's local space before parenting so later Object3D motion is shared.
+  geometry.applyMatrix4(target.matrixWorld.clone().invert())
+  target.add(decal)
+  return decal
+}
+```
+
+The decal mesh, material, and texture still need explicit ownership and
+disposal. Projection across a sharp corner can stretch or distort triangles;
+use smaller projectors or split the marking by surface. The helper handles rigid
+target motion; re-project if the target geometry itself changes.
+`DecalGeometry` reads base position/normal attributes, so it does not follow
+morph targets or skinned deformation. For a one-time deformed snapshot,
+`BufferGeometryUtils.computeMorphedAttributes()` provides the evaluated
+attributes needed to build a temporary projection source.
+
+When real bevel geometry is too expensive, add deliberate trim geometry or use
+material/normal detail. Avoid nearly coplanar duplicate panels: they flicker
+because of z-fighting. Give layers real separation or use a measured
+`polygonOffset` policy for decal-like surfaces.
+
+## Production Factory Contract
+
+Every reusable procedural factory should make these decisions explicit:
+
+- Units, local forward/up axes, origin, pivot, and intended scale.
+- Parameter ranges and a seeded random input when variation must be replayable.
+- Named meshes, animation pivots, VFX/audio sockets, and gameplay attachment points.
+- Render bounds and a separate collision proxy that intentionally matches gameplay.
+- Which geometries, materials, and textures are shared versus exclusively owned.
+- One teardown path that removes the root and disposes each exclusively owned resource once.
+- Expected mesh count, triangles, draw calls, and distance/culling strategy.
+
+Compute bounding boxes and spheres after procedural vertex edits, not before.
+Keep transforms on the root when the asset moves; rewrite vertices only when the
+shape itself changes. See [Geometry, Instancing, Batching, And LOD](geometry.md)
+for dynamic-buffer, merge, instance, batch, and ownership recipes.
 
 ## Material And Detail Rules
 
-- Use roughness/metalness contrast, not only hue contrast.
-- Use emissive for authored signals, not entire objects.
-- Use glass/clearcoat sparingly on hero details.
-- Add darker contact material under important objects.
-- Use decals to imply scale and function.
-- Reuse UI icon shapes as world decals for cohesion.
+- Use roughness/metalness contrast, not only hue contrast. In a physical
+  workflow, most texels are dielectric (`metalness = 0`) or metal
+  (`metalness = 1`); encode mixed surfaces in a map rather than choosing an
+  arbitrary whole-object midpoint.
+- Give reflective metals a suitable `scene.environment` or `envMap`; without
+  reflected surroundings, even correct metallic values read dull or black.
+- Use emissive for authored signals, screens, seams, and nozzles—not entire
+  objects. Emissive appearance does not cast light into the scene by itself.
+- Use `MeshPhysicalMaterial` features such as transmission, clearcoat, sheen,
+  and iridescence only where they materially improve the asset; they add
+  per-pixel cost. Keep `opacity = 1` when using physical transmission.
+- Add darker contact zones through geometry, textures, ambient occlusion, or
+  lighting rather than a floating coplanar patch.
+- Use decals and trim to imply scale and function. Reuse UI icon shapes as
+  world markings for cohesion.
+- Preserve comparable color value, roughness, and emissive cues across LODs so
+  a geometry transition does not look like a material pop.
 
 ## Diagnostics Checklist
 
@@ -299,7 +472,29 @@ After a model pass, report:
 - Mesh count.
 - Instanced mesh count.
 - Unique geometries/materials/textures.
-- Approximate triangle count if available.
+- Triangles and render calls in the worst active view, using `renderer.info`.
+- Approximate geometry bytes per unique geometry with
+  `BufferGeometryUtils.estimateBytesUsed()`; texture/GPU overhead is separate.
 - Collision proxies included.
 - LOD or culling strategy for repeated/background props.
+- Bounds, winding, hard-edge normals, UV seams, decal depth, and transparency
+  checked from multiple camera angles.
+- Dynamic states checked: boost, damage, collect, open/closed, destroyed, and
+  the most expensive repeated configuration.
 - Active-play screenshots, not only showroom renders.
+
+## Official Documentation
+
+- [BufferGeometry](https://threejs.org/docs/pages/BufferGeometry.html)
+- [BufferGeometryUtils](https://threejs.org/docs/pages/module-BufferGeometryUtils.html)
+- [Custom BufferGeometry manual](https://threejs.org/manual/en/custom-buffergeometry.html)
+- [ExtrudeGeometry](https://threejs.org/docs/pages/ExtrudeGeometry.html)
+- [LatheGeometry](https://threejs.org/docs/pages/LatheGeometry.html)
+- [TubeGeometry](https://threejs.org/docs/pages/TubeGeometry.html)
+- [ShapeGeometry](https://threejs.org/docs/pages/ShapeGeometry.html)
+- [DecalGeometry](https://threejs.org/docs/pages/DecalGeometry.html)
+- [InstancedMesh](https://threejs.org/docs/pages/InstancedMesh.html)
+- [BatchedMesh](https://threejs.org/docs/pages/BatchedMesh.html)
+- [LOD](https://threejs.org/docs/pages/LOD.html)
+- [MeshStandardMaterial](https://threejs.org/docs/pages/MeshStandardMaterial.html)
+- [MeshPhysicalMaterial](https://threejs.org/docs/pages/MeshPhysicalMaterial.html)

@@ -58,8 +58,10 @@ cost pass the same quality gate as an imported model.
 A premium pass must touch every weak visible surface:
 
 - Hero/player: authored silhouette, state feedback, decals/trim, readable front/up/side, collision proxy.
-- Hazards/enemies: at least three distinct silhouettes with telegraphs and material cues.
-- Rewards/interactables: at least two forms with collection states and motion/VFX hooks.
+- Hazards/enemies: the design-required family breadth, repetition budget,
+  telegraphs, and material cues (or `N/A` with a prewritten non-combat reason).
+- Rewards/interactables: the design-required value/state families with
+  activation states and motion/VFX hooks (or justified `N/A`).
 - World kit: foreground, playable lane/arena, midground, background/parallax, set dressing, scale cues.
 - Materials/textures: shared PBR/stylized material library, procedural panel lines, noise, trim, wear, emissive masks.
 - Lighting/render: color space, tone mapping, exposure, shadows/contact, fog/depth, post-processing discipline.
@@ -143,7 +145,9 @@ Own renderer setup in one place:
 
 - `outputColorSpace = THREE.SRGBColorSpace`.
 - Tone mapping and exposure selected for the art direction.
-- DPR capped for mobile and high-density displays.
+- DPR and drawing-buffer pixels capped per declared desktop/mobile/constrained
+  tier; record actual buffer size after resize rather than sharing one desktop
+  cap across every device.
 - Shadows enabled only for objects that benefit from grounding.
 - Post-processing is limited and measured: bloom, vignette, chromatic aberration, film grain, or color grade only when they improve authored forms.
 - Resize updates canvas, renderer, camera, composer, and UI CSS variables.
@@ -167,7 +171,8 @@ Use the render budget starting points and instancing/LOD/culling guidance in `re
 
 ## Implementation Order
 
-1. Score active screenshots and identify the weakest three categories.
+1. Declare category applicability from the game brief, score active screenshots,
+   and identify the weakest three applicable categories.
 2. Add material and diagnostic foundations.
 3. Decide which weak surfaces need procedural, project-local, user-supplied, or
    hybrid local treatment.
@@ -175,5 +180,9 @@ Use the render budget starting points and instancing/LOD/culling guidance in `re
 5. Add world prop kit and layered composition.
 6. Add lighting/render polish.
 7. Add event-driven VFX.
-8. Re-score desktop/mobile active screenshots.
-9. Optimize measured bottlenecks.
+8. Rebuild, replay through real input, and recapture the same deterministic
+   full-shell desktop/mobile states in normal and reduced-motion modes.
+9. Re-score and remeasure the same worst-case render scene.
+10. Fix the lowest category or highest measured bottleneck, then repeat steps
+    8-10 until the requested score and performance thresholds pass with no
+    automatic failure. If they cannot pass, report the blocker and next pass.

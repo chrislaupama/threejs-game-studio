@@ -7,6 +7,15 @@ actors. Skip it for simple static scenes and viewers.
 These contracts prevent model orientation, rendering, interaction, physics,
 and world queries from developing separate ideas of the same space.
 
+## Contents
+
+- Declare the basis
+- Separate intent from committed state
+- Choose multi-actor resolution semantics
+- Share world and surface queries
+- Brief check
+- Concrete unit and axis examples
+
 ## 1. Declare The Basis
 
 Record the minimum spatial assumptions near scene setup or in the app brief:
@@ -95,18 +104,34 @@ export const WORLD = {
 ### glTF intake
 
 ```ts
-import { SkeletonUtils } from 'three/addons/utils/SkeletonUtils.js';
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 
 async function loadActor(url: string): Promise<THREE.Object3D> {
   const gltf = await gltfLoader.loadAsync(url);
-  const root = SkeletonUtils.clone(gltf.scene); // skinned: clone skeleton graph
-  // Normalize once at the asset boundary — do not scatter fixup rotations later.
-  root.rotation.set(0, 0, 0);
-  root.scale.setScalar(1); // or authored meters-per-unit
-  root.updateMatrixWorld(true);
-  return root;
+  const authoredRoot = SkeletonUtils.clone(gltf.scene); // clone skeleton graph
+
+  // Preserve the authored root position, rotation, and scale. Put deliberate
+  // unit/basis/pivot correction on an owning wrapper at the asset boundary.
+  const visualRoot = new THREE.Group();
+  visualRoot.name = `${authoredRoot.name || 'actor'}:visual-root`;
+  visualRoot.add(authoredRoot);
+
+  const metersPerAuthoredUnit = 1; // record from intake; do not guess from bounds
+  visualRoot.scale.setScalar(metersPerAuthoredUnit);
+  // If intake proved a basis correction is necessary, apply its quaternion to
+  // visualRoot here. A conforming glTF is already right-handed, Y-up, meters.
+
+  visualRoot.updateMatrixWorld(true);
+  return visualRoot;
 }
 ```
+
+Never zero or overwrite the cloned glTF scene root to "normalize" it: that can
+erase an intentionally authored placement, rotation, or scale. The outer
+`visualRoot` owns verified asset-to-world correction while the cloned
+`authoredRoot` remains byte-for-byte faithful in transform semantics. Put the
+wrapper under a unit-scale authoritative entity root so collision, navigation,
+and camera math remain in world units.
 
 ### Raycast vs collider
 

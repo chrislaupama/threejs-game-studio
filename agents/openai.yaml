@@ -1,4 +1,4 @@
 interface:
   display_name: "Three.js Game Studio"
   short_description: "Coordinate complete, production-ready Three.js games"
-  default_prompt: "Use $threejs-game-studio as the sole coordinator for this Three.js game task. Inspect the installed Three.js revision and existing project first, choose tutorial or direct delivery plus focused, broad-production, or release scope, load the relevant bundled references, implement the player-facing outcome, and verify it in a real browser. Use novice-safe local-first defaults unless the request or project evidence requires otherwise; preserve unrelated architecture and dependencies."
+  default_prompt: "Use $threejs-game-studio to inspect this Three.js project, select the smallest relevant workflow and bundled references, implement the player-facing game outcome, and verify it in a real browser."

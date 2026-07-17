@@ -3,8 +3,8 @@
 ## Contents
 
 - First playable and module ownership
-- State transitions, time domains, and lifecycle
-- Local model/animation integration
+- State transitions, time domains, lifecycle, and scene-graph ownership
+- Local model and animation integration
 - Input, camera, collision, and mechanic iteration
 - Design/feel, audio hooks, diagnostics, and verification
 
@@ -62,8 +62,18 @@ Prefer simple modules once the prototype grows beyond one file:
 Keep update order explicit:
 
 ```text
-input -> fixed physics if any -> gameplay systems -> animation/VFX -> camera -> UI bridge -> render
+sample devices -> player/AI intents -> fixed movement + collision/physics
+               -> game rules/events -> animation/VFX -> camera
+               -> UI/audio bridge -> render
 ```
+
+Input handlers only update device state. At the start of each simulation step,
+sample that state and run scheduled AI sensing/decision work so every actor has
+an intent before movement and contact resolution. Collision/physics consumes
+those intents and commits accepted authoritative poses; rules then resolve
+contacts and emit events. Presentation systems and the camera read the committed
+state rather than predicting a second movement path. AI may run at a lower
+decision frequency, but its last intent remains stable between decision ticks.
 
 Do not invent abstractions before the mechanics need them. Do extract duplicated entity, input, collision, and asset logic once multiple features share it.
 
@@ -128,9 +138,42 @@ not accidentally share the wrong clock:
   simulation pauses by design
 - **UI time:** CSS/WAAPI or a real-time delta; remains responsive while paused
 
-Use r185 `THREE.Timer` once per rendered frame. Clamp the render delta after tab
-sleep. Accumulate fixed simulation steps when fairness or contact depends on
-timing. Do not call the timer repeatedly from separate systems.
+Keep the shared `Timer` on real time and derive the other domains explicitly.
+Changing its timescale changes every consumer of `getDelta()` and
+`getElapsed()`, which is usually too broad for gameplay slow motion or pause:
+
+```ts
+const frameTimer = new THREE.Timer();
+frameTimer.connect(document); // Page Visibility API avoids a hidden-tab spike
+
+let simulationTimeScale = 1;
+
+renderer.setAnimationLoop((timestamp) => {
+  frameTimer.update(timestamp); // exactly once before any time query
+  const realDelta = Math.min(frameTimer.getDelta(), 0.1);
+  const simulationDelta = state.name === 'playing'
+    ? realDelta * simulationTimeScale
+    : 0;
+  const presentationDelta = shouldAnimatePresentation(state)
+    ? realDelta
+    : 0;
+
+  updateFrame({ realDelta, simulationDelta, presentationDelta });
+  renderer.render(scene, camera);
+});
+
+async function disposeLoop(): Promise<void> {
+  // WebGLRenderer returns void; the common/WebGPU Renderer returns a Promise.
+  await renderer.setAnimationLoop(null);
+  frameTimer.dispose();
+}
+```
+
+Accumulate `simulationDelta` into fixed steps when fairness or contact depends
+on timing. A presentation system may deliberately use scaled simulation time or
+unscaled presentation time, but its owner must declare that choice. CSS/WAAPI
+UI can use its own real-time timeline. Do not call `Timer.update()` from
+separate systems, and stop the animation loop before disposing the timer.
 
 ## Lifecycle Contract
 
@@ -152,6 +195,46 @@ animation actions, audio voices, UI overlays, and seeded RNG state that belongs
 to the run. `dispose()` additionally removes listeners/workers and frees GPU or
 audio resources; reset is not a substitute for disposal.
 
+## Scene Graph And Transform Ownership
+
+Treat the scene graph as a transform and presentation hierarchy, not the
+canonical gameplay database. A useful entity shape is:
+
+```text
+entityRoot              authoritative world pose; normally unit scale
+  visualRoot            asset axis/scale/pivot correction and interpolation
+    model/skeleton
+    authored sockets    muzzle, hand, VFX, nameplate anchor
+  colliderDebugRoot     optional visualization of canonical colliders
+```
+
+The simulation or physics body owns the authoritative pose. Project it to
+`entityRoot` or `visualRoot` in one reconciliation step; collision must never
+read back an interpolated visual transform. Keep imported scale and orientation
+corrections on `visualRoot` so they do not contaminate collider units, movement,
+camera math, or child sockets.
+
+`position`, `quaternion`, and `scale` are local to an object's parent. Use
+`getWorldPosition()`, `getWorldQuaternion()`, `localToWorld()`, and
+`worldToLocal()` at ownership boundaries. If a world-space query happens before
+the renderer's normal matrix update, call `updateWorldMatrix(true, true)` on the
+smallest relevant root first.
+
+The following transform caveats are verified against r185. Recheck the
+installed API documentation and migration notes on every Three.js upgrade:
+
+- `Object3D.attach()` preserves world transform while reparenting, but does not
+  support hierarchies containing non-uniformly scaled nodes.
+- `Object3D.lookAt()` does not support an object with non-uniformly scaled
+  parents. Keep dynamic gameplay roots and cameras under identity- or
+  uniformly-scaled parents.
+- `Object3D.pivot` changes the center used for rotation and scale; it does not
+  redefine world position or the canonical collider origin. Prefer a dedicated
+  normalization root when an imported asset needs several corrections.
+- `Object3D.static` is a WebGPU-only optimization contract. Set it only for an
+  object whose transform, geometry, and material will not change after its
+  initial render; it is not a general freeze flag for dynamic entities.
+
 ## Imported Local 3D Assets And Animation
 
 When gameplay uses project-owned or user-supplied GLB/FBX assets:
@@ -159,13 +242,66 @@ When gameplay uses project-owned or user-supplied GLB/FBX assets:
 - Load GLB assets with `GLTFLoader` from `three/addons/loaders/GLTFLoader.js`.
 - Keep imported model loading in the asset layer, not inside entity update loops.
 - Wrap imported scenes in game entities with explicit scale, bounds, collision proxy, and state hooks.
-- Use `AnimationMixer` for rigged/animated GLBs and update mixers with `deltaSeconds`.
+- Use `AnimationMixer` for rigged/animated GLBs and assign each mixer one named
+  time domain. Gameplay-character mixers use scaled simulation time and pause
+  with gameplay; menu, ambient, and cosmetic mixers may use presentation time.
 - Map gameplay states to clips: idle, walk/run, jump, attack/slash/shoot, hurt, fall, turn.
 - Decide whether root motion is used. For arcade games, prefer in-place animation and move the entity in code.
 - Keep simple collision proxies independent from the detailed imported mesh.
 - Add an actionable loading/error state if an asset fails to load. Use a
   clearly labeled local placeholder only when it preserves useful progress.
 - Report file size, clip names, approximate triangles, and texture count after import.
+
+Create each action once, then transition actions instead of calling
+`clipAction()` every frame. Cross-fade locomotion loops and configure one-shots
+explicitly:
+
+```ts
+const mixer = new THREE.AnimationMixer(visualRoot);
+const actions = new Map(
+  gltf.animations.map((clip) => [clip.name, mixer.clipAction(clip)] as const),
+);
+let activeAction: THREE.AnimationAction | undefined;
+
+type ActionTransition = {
+  fadeSeconds?: number;
+  once?: boolean;
+};
+
+function playAction(
+  name: string,
+  { fadeSeconds = 0.15, once = false }: ActionTransition = {},
+): THREE.AnimationAction {
+  const next = actions.get(name);
+  if (!next) throw new Error(`Missing animation clip: ${name}`);
+  if (next === activeAction && !once) return next;
+
+  const previous = activeAction;
+  next.reset().setEffectiveTimeScale(1).setEffectiveWeight(1);
+  next.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat, once ? 1 : Infinity);
+  next.clampWhenFinished = once;
+  next.fadeIn(fadeSeconds).play();
+  if (previous && previous !== next) previous.fadeOut(fadeSeconds);
+  activeAction = next;
+  return next;
+}
+
+function updateGameplayAnimation(simulationAnimationDelta: number): void {
+  mixer.update(simulationAnimationDelta);
+}
+```
+
+An independently owned cosmetic mixer would call `update(presentationDelta)`
+from the presentation update instead.
+
+Listen for the mixer's `finished` event when a one-shot must return to an idle
+or locomotion state, and remove that listener during teardown. Deterministic hit
+windows, damage, and collision remain simulation events; mixer callbacks only
+drive presentation or request a canonical state transition.
+
+Before releasing an animated instance, remove mixer listeners, call
+`mixer.stopAllAction()`, then `mixer.uncacheRoot(visualRoot)`. Remove the visual
+root only after the mixer no longer owns bindings to it.
 
 ## Input And Intent
 
@@ -232,12 +368,19 @@ library only when the project already owns that dependency.
 
 ## Collision And Physics
 
-Use dependency-free custom collision and authored kinematics for new work:
-triggers, lanes, runners, pickups, bullets, arenas, balls, rails, ramps, moving
-platforms, and bounded arcade dynamics. When physics is in scope, read
-`physics.md` before designing the collider and fixed-step model. Preserve an
-engine already owned by an existing project when replacing it is out of scope,
-but do not install or expand one through this skill.
+Use dependency-free custom collision and authored kinematics for bounded arcade
+work such as triggers, lanes, pickups, bullets, rails, ramps, and simple moving
+platforms. Use official Three.js math addons such as `Capsule`, `Octree`, and
+`OBB` when their collision model fits. General rigid-body dynamics, stable
+stacks, constraints, ragdolls, or many interacting bodies justify an explicit
+physics-engine decision instead of a growing custom solver.
+
+When physics is in scope, read `physics.md` and the official physics manual
+before choosing colliders and a fixed-step model. Preserve an engine already
+owned by an existing project when replacement is out of scope. For a new
+dependency, record why simple/addon collision is insufficient, confirm the
+runtime and licensing footprint, and obtain the same dependency approval used
+for other architecture changes; never install or expand an engine silently.
 
 Rules:
 
@@ -350,3 +493,12 @@ Minimum evidence after meaningful gameplay work:
 - Mobile input works visually but does not emit game intents.
 - Imported local model loads but has wrong scale, pivot, orientation, animation
   root motion, or no collision proxy.
+
+## Official Documentation
+
+- [Timer](https://threejs.org/docs/pages/Timer.html)
+- [Object3D](https://threejs.org/docs/pages/Object3D.html)
+- [Scene graph manual](https://threejs.org/manual/en/scenegraph.html)
+- [AnimationMixer](https://threejs.org/docs/pages/AnimationMixer.html)
+- [AnimationAction](https://threejs.org/docs/pages/AnimationAction.html)
+- [Physics manual](https://threejs.org/manual/en/physics.html)

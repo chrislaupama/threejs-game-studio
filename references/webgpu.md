@@ -2,7 +2,7 @@
 
 ## Contents
 
-- Modern r185+ contract and product status
+- Modern contract and product status verified against r185
 - Heavy-3D renderer decision
 - Renderer family and fallback boundaries
 - TypeScript boot, backend reporting, resize, and teardown
@@ -23,8 +23,10 @@ Asset-loading examples use the project-owned `publicAssetUrl()` helper from
 
 ## Modern Contract And Status
 
-This reference supports **Three.js r185 and onwards**. Prefer the project's
-installed revision and live docs over any frozen patch string. The official
+This reference is verified against **Three.js r185**. Prefer the project's
+installed revision and live docs over any frozen patch string, and recheck the
+official API, source, types, migration notes, and examples on every upgrade.
+The official
 [WebGPURenderer guide](https://threejs.org/manual/en/webgpurenderer) calls
 `WebGPURenderer` the next-generation alternative to `WebGLRenderer`, with a
 WebGPU backend and automatic WebGL 2 fallback. It also explicitly says the
@@ -36,10 +38,22 @@ universally supported, or a drop-in renderer swap. Its strongest value is the
 modern renderer architecture: node materials, TSL that can target WGSL or GLSL,
 the node post stack, GPU compute, and newer renderer features.
 
+r185 changed WebGPU premultiplied-alpha handling. For an opaque game canvas,
+set an opaque `scene.background` or use `renderer.setClearColor(color, 1)`;
+reserve a transparent background or clear alpha for a canvas that intentionally
+composites with HTML, and regression-test that composition after an r184→r185
+upgrade.
+
 The [WebGPURenderer API](https://threejs.org/docs/pages/WebGPURenderer.html),
 [Renderer API](https://threejs.org/docs/pages/Renderer.html),
 [TSL specification](https://threejs.org/docs/TSL.html), matching r185 source,
 and official r185 examples are the implementation authorities.
+
+Public API guidance can be rechecked against the installed live docs. Claims
+in this reference derived from implementation details—such as backend flags,
+cluster assignment behavior, target ownership, type/runtime mismatches, and
+timestamp hooks—are scoped to r185 only. Re-read the matching source, types,
+migration notes, and official examples on every Three.js upgrade.
 
 ## Offer The Heavy-3D Choice
 
@@ -100,7 +114,11 @@ r185's separate `WebGLRenderer` has a limited migration bridge through
 `setNodesHandler(new WebGLNodesHandler())` and `setEffects()`. It can help port
 supported node materials/effects incrementally. It does **not** allow
 `RenderPipeline` on `WebGLRenderer`, and it does not relax any restriction on a
-`WebGPURenderer` instance. See `rendering.md` for the compile-checked boundary.
+`WebGPURenderer` instance. The effects bridge must be chosen at construction:
+`WebGLRenderer` requires `outputBufferType: HalfFloatType` or `FloatType` before
+`setEffects()`; its default `UnsignedByteType` output is rejected. Clear the
+bridge with `renderer.setEffects(null)` during teardown. See `rendering.md` for
+the compile-checked setup.
 
 Choose at boot and reload to change renderer/backend. Live hot-swapping makes
 resource ownership, material identity, render targets, caches, and recovery
@@ -166,6 +184,8 @@ async function createWebGpuGame(canvas: HTMLCanvasElement) {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1;
+  // Native WebGPU reads this during init when requesting an XR-compatible adapter.
+  renderer.xr.enabled = true;
 
   renderer.onError = (error) => {
     console.error(`Three.js backend error: ${backendErrorMessage(error)}`);
@@ -229,8 +249,13 @@ async function createWebGpuGame(canvas: HTMLCanvasElement) {
   return {
     renderer,
     backend: backendName(renderer),
-    dispose() {
-      void renderer.setAnimationLoop(null);
+    async dispose() {
+      const session = renderer.xr.getSession();
+      if (session) await session.end();
+
+      // r185 restores the pre-session callback while ending XR. Clear that
+      // restored loop before releasing anything the callback can reach.
+      await renderer.setAnimationLoop(null);
       timer.dispose();
       pipeline.dispose();
       scenePass.dispose();
@@ -316,6 +341,33 @@ material.metalness = 0.1;
 cool.value.set(0x1c4f8f);
 ```
 
+Use JavaScript branches outside a TSL function for CPU-side material selection.
+For a value that varies per vertex, fragment, or compute invocation, put flow
+inside `Fn()` and use TSL `If()`, `Switch()`, or `Loop()`:
+
+```ts
+// Continuing the material example above.
+import { Fn, If, float } from 'three/tsl';
+
+const shapePulse = Fn(([value]: [typeof pulse]) => {
+  const result = value.toVar();
+
+  If(value.greaterThan(0.65), () => {
+    result.assign(float(1));
+  });
+
+  return result;
+});
+
+material.emissiveNode = color(0x14bde8).mul(shapePulse(pulse));
+```
+
+Read the official [TSL specification](https://threejs.org/docs/TSL.html) for
+typed constants, variables, functions, arrays, loops, texture sampling,
+material slots, render passes, and storage. Keep reusable graph functions small
+and name important uniforms/functions so generated shader diagnostics remain
+readable.
+
 Keep color-space semantics identical to the WebGL path: color and emissive maps
 use `SRGBColorSpace`; normal, roughness, metalness, AO, masks, and other data
 maps use `NoColorSpace`; HDR loader output remains in its provided linear
@@ -389,11 +441,12 @@ const particleMaterial = new THREE.SpriteNodeMaterial({
 });
 particleMaterial.positionNode = positions.toAttribute();
 
-const particles = new THREE.InstancedMesh(
-  new THREE.PlaneGeometry(0.04, 0.04),
-  particleMaterial,
-  COUNT,
-);
+// Sprite.count is the WebGPURenderer instancing path used by the official
+// compute-particles example. SpriteNodeMaterial is a sprite material, not a
+// mesh material for an InstancedMesh/PlaneGeometry pair.
+const particles = new THREE.Sprite(particleMaterial);
+particles.count = COUNT;
+particles.scale.setScalar(0.04);
 scene.add(particles);
 // GPU-updated positions are not reflected in CPU-computed instance bounds.
 // Disabling culling is conservative; partition large effects into bounded
@@ -410,17 +463,56 @@ await renderer.setAnimationLoop((timestamp) => {
   renderer.compute(updateCompute);
   renderer.render(scene, camera);
 });
+
+async function disposeParticles() {
+  const session = renderer.xr.getSession();
+  if (session) await session.end();
+
+  // Session end can restore the pre-XR compute/render callback in r185.
+  await renderer.setAnimationLoop(null);
+  scene.remove(particles);
+  timer.dispose();
+  initCompute.dispose();
+  updateCompute.dispose();
+  particleMaterial.dispose();
+  positions.value.dispose();
+  velocities.value.dispose();
+}
 ```
 
 This is a presentation effect, not a collision system. Keep player hits,
 objectives, scores, and other authoritative rules in deterministic CPU state or
 design an explicit, infrequent readback boundary with loading/error handling.
-Avoid GPU-to-CPU readback in the frame hot path.
+Avoid GPU-to-CPU readback in the frame hot path. When a deliberate checkpoint
+needs a snapshot, use the current renderer readback API and remember that WGSL
+storage `vec3` data may be padded to a four-float stride:
+
+```ts
+const positionBytes = await renderer.getArrayBufferAsync(positions.value);
+const positionFloats = new Float32Array(positionBytes);
+const storageStride = positions.value.itemSize;
+const firstPosition = positionFloats.subarray(0, Math.min(3, storageStride));
+```
+
+For repeated diagnostics, a
+[ReadbackBuffer](https://threejs.org/docs/pages/ReadbackBuffer.html) can reuse
+the intermediate GPU buffer, but it must be `release()`d between mappings and
+`dispose()`d at teardown. Readback still stalls asynchronous GPU work; it is not
+a substitute for CPU-authoritative collision or per-frame telemetry.
 
 The bounded delta makes motion independent of display refresh within the
 integrator's limits and avoids a large hidden-tab step. A fixed compute cadence
-is preferable when repeatability matters. Stop the animation loop and dispose
-the `Timer`, geometry, node material, and storage owners during teardown.
+is preferable when repeatability matters. The second TSL `.compute()` argument
+is the workgroup size—`simulate().compute(COUNT, [64])` makes the default
+one-dimensional size explicit. Tune it only with target-device measurements and
+device-limit checks. `renderer.compute(node, [x, y, z])` also accepts a runtime
+multidimensional dispatch override, or an `IndirectStorageBufferAttribute` for
+indirect dispatch. Atomics and `workgroupBarrier()` solve specific shared-data
+hazards; a workgroup barrier does not synchronize separate workgroups or
+dispatches.
+
+Stop the animation loop and dispose the `Timer`, compute nodes, node material,
+and storage attribute owners during teardown, as the example does.
 
 `computeAsync()` remains a current method on modern revisions. Prefer `compute()` after
 explicit initialization for the ordinary frame loop; use async APIs only when
@@ -453,9 +545,29 @@ await renderer.init();
 
 Use it only after the lighting design truly needs many local point lights.
 Baked emissive art, environment lighting, a small key/fill rig, pooled lights,
-and fewer shadow casters remain cheaper. Measure cluster construction/compute,
-fragment cost, light overlap, shadow maps, and target-device behavior. Validate
-the WebGL 2 fallback separately; do not infer compatibility from WebGPU success.
+and fewer shadow casters remain cheaper.
+
+The r185 implementation clusters only `PointLight` instances whose
+`castShadow` is not `true`; shadow-casting point lights and every other light
+type stay in the ordinary material-light path. Give clustered point lights a
+finite, positive `distance`. Although ordinary `PointLight.distance = 0` means
+unbounded illumination, **distance zero is unsupported by r185
+`ClusteredLighting`**: its z-range candidate step substitutes the camera range,
+while its cluster sphere test still uses the literal zero radius, so assignment
+is not reliable. Use bounded point lights or a non-clustered light type for
+unbounded illumination.
+
+Treat `maxLights` and `maxLightsPerCluster` as capacities, not aspirations.
+Keep the active unshadowed-point-light count at or below `maxLights`, and build a
+stress view in which many ranges overlap the same screen tile and depth slice.
+The r185 source does not emit an application-facing overflow warning;
+per-cluster construction stops when `maxLightsPerCluster` is full. Expose active
+candidate count and the configured capacities in diagnostics, then reduce light
+count/range or raise a measured capacity before visible light loss can occur.
+
+Measure cluster construction/compute, fragment cost, light overlap, shadow
+maps, and target-device behavior. Validate the WebGL 2 fallback separately; do
+not infer compatibility from WebGPU success.
 
 ## RenderPipeline Post-Processing
 
@@ -475,14 +587,93 @@ glow.setResolutionScale(0.5);
 const pipeline = new THREE.RenderPipeline(renderer);
 pipeline.outputNode = sceneColor.add(glow);
 
-await renderer.setAnimationLoop(() => {
+function renderPostFrame() {
   if (renderer.xr.isPresenting) {
     renderer.render(scene, camera);
   } else {
     pipeline.render();
   }
-});
+}
+
+await renderer.setAnimationLoop(renderPostFrame);
+
+async function disposePost() {
+  const session = renderer.xr.getSession();
+  if (session) await session.end();
+
+  // Clear the callback restored by XRManager before disposing its graph.
+  await renderer.setAnimationLoop(null);
+  glow.dispose();
+  scenePass.dispose();
+  pipeline.dispose();
+}
 ```
+
+Changing uniforms such as bloom strength updates the existing graph. Replacing
+the graph after its first render requires the documented invalidation flag and
+an explicit ownership handoff for every target-owning node retired with the old
+graph:
+
+```ts
+type DisposableNodeOwner = { dispose(): void };
+
+async function replacePostGraph(
+  nextOutputNode: THREE.Node,
+  retiredOwners: readonly DisposableNodeOwner[],
+) {
+  if (renderer.xr.getSession()) {
+    throw new Error('Defer post-graph replacement until the XR session ends');
+  }
+
+  await renderer.setAnimationLoop(null);
+  pipeline.outputNode = nextOutputNode;
+  pipeline.needsUpdate = true;
+  for (const owner of retiredOwners) owner.dispose();
+  await renderer.setAnimationLoop(renderPostFrame);
+}
+```
+
+Only pass owners that are absent from the new graph; shared scene passes and
+history targets must stay alive until their final consumer releases them. Keep
+the loop stopped from graph detachment through retired-owner disposal so no
+frame can observe a half-replaced graph.
+
+When an effect needs more than beauty color, capture only the required outputs
+with MRT. This selective-bloom form renders beauty and emissive data together,
+then blooms only the emissive channel:
+
+```ts
+import { emissive, mrt, output, pass as renderMrtPass } from 'three/tsl';
+import { bloom as bloomEmissive } from 'three/addons/tsl/display/BloomNode.js';
+
+const selectivePass = renderMrtPass(scene, camera);
+selectivePass.setMRT(mrt({ output, emissive }));
+
+const beauty = selectivePass.getTextureNode('output');
+const emissiveOnly = selectivePass.getTextureNode('emissive');
+const selectiveGlow = bloomEmissive(emissiveOnly, 0.45, 0.25, 0.9);
+
+const selectivePipeline = new THREE.RenderPipeline(renderer);
+selectivePipeline.outputNode = beauty.add(selectiveGlow);
+
+async function disposeSelectivePost() {
+  const session = renderer.xr.getSession();
+  if (session) await session.end();
+
+  // Clear the callback restored by XRManager before disposing target owners.
+  await renderer.setAnimationLoop(null);
+  selectiveGlow.dispose();
+  selectivePass.dispose();
+  selectivePipeline.dispose();
+}
+```
+
+Depth is available from `getTextureNode('depth')` without adding an MRT color
+attachment. Normals, velocity, emissive, and custom outputs add target memory
+and bandwidth, so request them only when a downstream effect consumes them and
+choose their texture types deliberately. See the official
+[TSL MRT contract](https://threejs.org/docs/TSL.html#multiple-render-targets-mrt)
+and [BloomNode](https://threejs.org/docs/pages/BloomNode.html) selective example.
 
 In r185, `RenderPipeline.render()` temporarily disables `renderer.xr.enabled`
 while it owns rendering. It is therefore a desktop/non-XR post path. During an
@@ -497,16 +688,19 @@ Do not add a second conversion. For an effect that must run after conversion,
 use the current `renderOutput()` node deliberately and set
 `pipeline.outputColorTransform = false`.
 
-`PassNode` and current self-sizing effect nodes read the renderer's drawing
-buffer size. Resize the renderer and camera from one owner. There is no
+In r185, `PassNode` and the bundled self-sizing effect nodes read the renderer's
+drawing-buffer size. Resize the renderer and camera from one owner. There is no
 `RenderPipeline.setSize()` method. Custom targets and history buffers remain
-their creator's resize/disposal responsibility.
+their creator's resize/disposal responsibility. Re-verify this target-ownership
+behavior when upgrading before removing or adding manual resize calls.
 
-Dispose the pipeline and every target-owning node after stopping the loop. The
-r185+ runtime `BloomNode` has `dispose()`, while some `@types/three` releases
-may omit that method — cast or extend locally when types lag the runtime, and
-keep the guarded cleanup described in `shaders.md` until the installed type
-declaration catches up.
+When XR may be active, end and await the session first because r185 restores its
+saved pre-session callback. Then clear that restored loop and dispose the
+pipeline plus every target-owning node, as `disposePost()` demonstrates. The
+r185 runtime `BloomNode` and `PassNode` have `dispose()`, while some
+`@types/three` releases may omit a runtime method — cast or extend locally when
+types lag the installed runtime, and keep the guarded cleanup described in
+`shaders.md` until the declaration catches up.
 
 ## Texture Compression And Output Bandwidth
 
@@ -577,10 +771,34 @@ These counters do not replace a GPU timeline. Measure representative frame
 captures, not empty scenes. Compare native WebGPU and every claimed fallback at
 the same CSS size, DPR, scene state, camera, quality tier, and warm-up state.
 
-For diagnostic sampling, `trackTimestamp: true` requests timing support. After
-initialization, guard timestamp use with `renderer.hasFeature('timestamp-query')`.
-Use `resolveTimestampsAsync()` outside the ordinary per-frame hot path; frequent
-GPU readback can disturb the workload being measured.
+For diagnostic sampling, the r185 backend option `trackTimestamp: true`
+requests timing support. This option and `resolveTimestampsAsync()` are r185
+source-backed diagnostic surfaces, but they are not documented on the generated
+public `WebGPURenderer`/`Renderer` API pages. Treat them as experimental,
+r185-pinned instrumentation; re-verify the installed source and types on every
+upgrade, or use
+the official [Inspector](https://threejs.org/examples/jsm/inspector/Inspector.js)
+integration instead of building a permanent game dependency on them.
+
+After initialization, guard timestamp use and resolve render and compute pools
+explicitly—the method's no-argument default resolves render timing only:
+
+```ts
+if (renderer.hasFeature('timestamp-query')) {
+  const renderMs = await renderer.resolveTimestampsAsync(
+    THREE.TimestampQuery.RENDER,
+  );
+  const computeMs = await renderer.resolveTimestampsAsync(
+    THREE.TimestampQuery.COMPUTE,
+  );
+  console.debug({ renderMs, computeMs });
+}
+```
+
+Resolve outside the ordinary per-frame hot path; frequent query resolution and
+GPU readback can disturb the workload being measured. The WebGL 2 fallback can
+report different feature support, so perform the guard after the actual backend
+has initialized.
 
 Track at least:
 
@@ -615,7 +833,7 @@ objectives, or timing. Use hysteresis so adaptive quality does not oscillate.
 
 ## Current Deprecation Guardrails
 
-For modern (r185+) WebGPU code:
+For WebGPU code verified against r185:
 
 - use `RenderPipeline`, not the deprecated `PostProcessing` alias
 - use `pipeline.render()`, not deprecated `pipeline.renderAsync()`
@@ -638,9 +856,10 @@ For modern (r185+) WebGPU code:
 - never combine this renderer with GLSL `ShaderMaterial`, `RawShaderMaterial`,
   `onBeforeCompile()`, or `EffectComposer`
 
-Run `npm run audit:structure` when changing this skill: it scans
-executable Markdown examples and scaffold TypeScript for the curated r185+
-deprecated API set and renderer-family mixing.
+Run `npm run audit:structure` when changing this skill: it scans executable
+Markdown examples and scaffold TypeScript for the deprecated API set verified
+against r185 and for renderer-family mixing. Re-audit the scanner rules on each
+Three.js upgrade.
 
 ## WebGPU Release Gate
 

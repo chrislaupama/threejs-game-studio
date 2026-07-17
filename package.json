@@ -14,6 +14,7 @@
     "audit:assets": "node --import tsx scripts/audit-gltf-assets.ts",
     "audit:structure": "node --import tsx scripts/audit-skill-structure.ts .",
     "audit:skill-local": "node --import tsx scripts/audit-skill-local-only.ts .",
+    "audit:official-links": "node --import tsx scripts/audit-official-links.ts .",
     "probe:three": "node --import tsx scripts/probe-three-revision.ts",
     "inspect:canvas": "node --import tsx scripts/inspect-threejs-canvas.ts",
     "ship-check": "node --import tsx scripts/ship-check.ts",

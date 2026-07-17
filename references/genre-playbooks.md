@@ -402,14 +402,34 @@ whose pressure comes from hazards rather than combat.
 
 ## First-Person Or Third-Person Action
 
+For third-person play, also load **Third-Person Action Rig Contract** in
+`interaction.md`. Load `ai-navigation.md` when opponents use perception,
+pursuit, pathfinding, cover selection, or crowds.
+
 ### Player Contract
 
 - Define locomotion, aim model, camera sensitivity, field of view, target range,
   attack cadence, reload/cooldown, defense/evasion and damage recovery.
-- Choose first-person, over-shoulder, lock-on or free third-person camera before
-  tuning weapons and encounters. Keep one active camera/input owner per mode.
+- Declare the default camera/aim mode and all supported transitions before
+  tuning weapons and encounters. First-person, over-shoulder aim, free
+  third-person traversal, and lock-on may coexist; keep one active camera/input
+  owner per mode and define entry, exit, target-loss, and fallback behavior.
 - Decide hitscan, projectile, melee volume or hybrid attacks. Communicate range,
   hit confirmation, ammo/resource and incoming threat direction.
+
+### Third-Person Camera And Aim Contract
+
+- Follow one semantic actor root, never an animated bone. Collision resolves
+  the actor pose first; the rig consumes that accepted or interpolated pose.
+- Define target/pivot height, yaw/pitch limits, default side and distance,
+  shoulder swap, FOV, look sensitivity, recentering, and reduced-motion limits.
+- Query from the semantic target to the desired camera pose, move inward
+  immediately around blockers, and smooth outward only after clearance.
+- Aim from the camera/reticle to establish intent, then validate the path from
+  the muzzle or attack origin so near cover cannot be shot through. State how
+  parallax, out-of-range points, and blocked muzzle paths are communicated.
+- Keep recoil, shake, lean, and lock-on framing as bounded presentation offsets
+  owned by the rig. They must not rewrite the actor's authoritative transform.
 
 ### Combat And Encounter Contract
 

@@ -1,12 +1,13 @@
 /** Focused regressions for audit-skill-structure.ts. */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { isModernThreeRange } from "./audit-skill-structure.ts";
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "audit-skill-structure.ts");
 
@@ -81,6 +82,22 @@ test("accepts one self-contained coordinator and r185 scaffold", () => {
   assert.equal(result.status, 0, diagnostic(result));
 });
 
+test("runs the structure CLI through a symlinked entry path", () => {
+  const directory = mkdtempSync(join(tmpdir(), "audit-structure-link-"));
+  try {
+    const link = join(directory, "audit-skill-structure.ts");
+    symlinkSync(SCRIPT, link);
+    const result = spawnSync(process.execPath, ["--import", "tsx", link, "--help"], {
+      encoding: "utf8",
+      cwd: dirname(SCRIPT),
+    });
+    assert.equal(result.status, 0, diagnostic(result));
+    assert.match(result.stdout, /usage: audit-skill-structure/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("validates the skill frontmatter contract without Python", () => {
   const malformed = baseFiles();
   malformed["SKILL.md"] = "# No frontmatter\n";
@@ -129,6 +146,25 @@ test("rejects a reference not named in root skill", () => {
   assert.equal(result.status, 1);
   assert.match(result.stdout, /reference is not directly named in root SKILL\.md/);
   assert.match(result.stdout, /references\/unlisted\.md/);
+});
+
+test("enforces progressive disclosure for the coordinator and long references", () => {
+  const files = baseFiles();
+  files["SKILL.md"] += `${"Keep task detail routed through references.\n".repeat(500)}`;
+  files["references/core.md"] = `# Core\n\n${"Guidance.\n".repeat(100)}`;
+  const result = runAudit(files);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout,
+    /root coordinator exceeds the progressive-disclosure line budget/,
+  );
+  assert.match(result.stdout, /long reference is missing a top-level contents map/);
+
+  files["SKILL.md"] = baseFiles()["SKILL.md"]!;
+  files["references/core.md"] =
+    `# Core\n\n## Contents\n\n- Guidance\n\n${"Guidance.\n".repeat(100)}`;
+  const corrected = runAudit(files);
+  assert.equal(corrected.status, 0, diagnostic(corrected));
 });
 
 test("rejects broken or escaping relative Markdown links", () => {
@@ -180,13 +216,32 @@ test("rejects a Three.js range below the r185 floor", () => {
   const result = runAudit(files);
   assert.equal(result.status, 1);
   assert.equal(
-    result.stdout.split("Three.js scaffold dependency must admit r185 or newer").length - 1,
+    result.stdout.split("Three.js scaffold dependency must start at r185 or newer").length - 1,
     2,
   );
   assert.match(result.stdout, /0\.185\.0/);
 });
 
-test("accepts an open r185+ Three.js range newer than a frozen patch", () => {
+test("rejects contradictory and mixed-old npm ranges", () => {
+  assert.equal(isModernThreeRange("0.190.0 <0.185.0", "three"), false);
+  assert.equal(isModernThreeRange("^0.186.0 || ^0.184.0", "three"), false);
+  assert.equal(isModernThreeRange(">=0.185.0 <0.190.0", "three"), true);
+  assert.equal(isModernThreeRange("^0.186.0", "@types/three"), true);
+  assert.equal(isModernThreeRange("latest", "@types/three"), false);
+});
+
+test("handles equal comparator bounds and npm hyphen ranges", () => {
+  assert.equal(isModernThreeRange(">=0.185.0 <=0.185.0", "three"), true);
+  assert.equal(isModernThreeRange(">=0.185.0 <0.185.0", "three"), false);
+  assert.equal(isModernThreeRange(">=0.185.0 >0.185.0 <=0.185.0", "three"), false);
+  assert.equal(isModernThreeRange(">0.185.0 >=0.185.0 <=0.185.0", "three"), false);
+  assert.equal(isModernThreeRange("0.185.0 - 0.186.0", "three"), true);
+  assert.equal(isModernThreeRange("0.185 - 0.186", "three"), true);
+  assert.equal(isModernThreeRange("0.184.9 - 0.186.0", "three"), false);
+  assert.equal(isModernThreeRange("0.190.0 - 0.185.0", "three"), false);
+});
+
+test("accepts a supported declaration starting above the r185 baseline", () => {
   const files = baseFiles();
   files["assets/threejs-vite-game/package.json"] = JSON.stringify({
     scripts: {
@@ -243,15 +298,27 @@ test("rejects stale Three.js TypeScript APIs", () => {
   files["assets/threejs-vite-game/src/legacy.ts"] =
     "import * as THREE from 'three';\n" +
     "declare const renderer: THREE.WebGLRenderer;\n" +
+    "declare const albedoMap: THREE.Texture;\n" +
     "const clock = new THREE.Clock();\n" +
     "requestAnimationFrame(() => clock.getDelta());\n" +
-    "renderer.outputEncoding = THREE.sRGBEncoding;\n";
+    "renderer.outputEncoding = THREE.sRGBEncoding;\n" +
+    "albedoMap.encoding = THREE.sRGBEncoding;\n";
   const result = runAudit(files);
   assert.equal(result.status, 1);
   assert.match(result.stdout, /deprecated THREE\.Clock timing/);
-  assert.match(result.stdout, /manual requestAnimationFrame loop/);
   assert.match(result.stdout, /removed renderer\.outputEncoding/);
+  assert.match(result.stdout, /removed Texture\.encoding/);
   assert.match(result.stdout, /removed color encoding constant/);
+});
+
+test("allows an intentionally owned manual animation frame loop", () => {
+  const files = baseFiles();
+  files["assets/threejs-vite-game/src/preview-loop.ts"] =
+    "let frame = 0;\n" +
+    "function tick() { frame = requestAnimationFrame(tick); }\n" +
+    "export function stop() { cancelAnimationFrame(frame); }\n";
+  const result = runAudit(files);
+  assert.equal(result.status, 0, diagnostic(result));
 });
 
 test("does not treat comments or strings as stale API usage", () => {
@@ -317,6 +384,18 @@ test("accepts current compute and WebGL TSL migration bridge", () => {
     "```\n";
   const result = runAudit(files);
   assert.equal(result.status, 0, diagnostic(result));
+});
+
+test("reports current VTK/LWO loaders as deprecated rather than removed at r185", () => {
+  const files = baseFiles();
+  files["assets/threejs-vite-game/src/loaders.ts"] =
+    "import { VTKLoader } from 'three/addons/loaders/VTKLoader.js';\n" +
+    "import { LWOLoader } from 'three/addons/loaders/LWOLoader.js';\n" +
+    "void VTKLoader; void LWOLoader;\n";
+  const result = runAudit(files);
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /deprecated VTKLoader \(present in r185/);
+  assert.match(result.stdout, /deprecated LWOLoader \(present in r185/);
 });
 
 test("requires an XR bypass in a scaffold RenderPipeline", () => {

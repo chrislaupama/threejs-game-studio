@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#12161a" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <title>Vector Sprint · Three.js Runner</title>
+  </head>
+  <body>
+    <main id="app">
+      <canvas
+        id="game-canvas"
+        tabindex="0"
+        aria-label="Vector Sprint game. The runner moves forward automatically. Steer left or right, avoid barriers, and reach 120 metres."
+      ></canvas>
+      <section id="hud" aria-label="Run status">
+        <div class="hud-metric" aria-label="Distance">
+          <span>Distance</span>
+          <strong><span id="score-value">0</span>/<span id="target-value">120</span> m</strong>
+        </div>
+        <div class="hud-metric" aria-label="Run time">
+          <span>Run time</span>
+          <strong id="timer-value">0.0 s</strong>
+        </div>
+        <div class="hud-metric" aria-label="Current pace">
+          <span>Pace</span>
+          <strong id="pace-value">14 m/s</strong>
+        </div>
+        <div id="status-line" role="status" aria-live="polite" aria-atomic="true">
+          Ready · choose your opening lane
+        </div>
+      </section>
+      <div id="system-controls" aria-label="Game settings">
+        <button id="mute-button" type="button" aria-pressed="false">Sound on</button>
+        <button id="pause-button" type="button" aria-pressed="false" aria-keyshortcuts="P Escape">
+          Pause
+        </button>
+      </div>
+      <section id="state-panel" hidden aria-live="assertive" aria-atomic="true">
+        <p id="state-kicker">Vector Sprint</p>
+        <h1 id="state-title">Game paused</h1>
+        <p id="state-copy">Press P or Escape to resume.</p>
+        <button id="retry-button" type="button" hidden aria-keyshortcuts="R Enter">
+          Sprint again
+        </button>
+      </section>
+      <div id="touch-controls" role="group" aria-label="Runner controls">
+        <div id="touch-stick" role="application" aria-label="Steer left or right">
+          <div id="touch-knob"></div>
+        </div>
+        <button id="dash-button" type="button" aria-label="Hold to boost speed">Boost</button>
+      </div>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

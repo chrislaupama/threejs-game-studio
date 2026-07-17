@@ -119,6 +119,12 @@ renderer.setAnimationLoop((timestamp) => {
   presentInterpolatedState(alpha, frameDelta);
   renderer.render(scene, camera);
 });
+
+async function disposeGameCore(): Promise<void> {
+  // Awaiting is harmless for WebGLRenderer and required by the common renderer.
+  await renderer.setAnimationLoop(null);
+  timer.dispose();
+}
 ```
 
 This real-time overload policy drops excess accumulated time. A deterministic
@@ -299,7 +305,8 @@ failed attempt later enter `menu`.
 
 ### Fixed simulation and render interpolation
 
-Store previous and current authoritative transforms around each fixed update:
+Snapshot every interpolated body once at the start of each fixed step, before
+any controller, collision response, or rule mutates current state:
 
 ```ts
 type BodyState = {
@@ -309,8 +316,11 @@ type BodyState = {
   visual: THREE.Object3D;
 };
 
-function simulateBody(body: BodyState, dt: number) {
+function snapshotBody(body: BodyState) {
   body.previous.copy(body.current);
+}
+
+function simulateBody(body: BodyState, dt: number) {
   body.current.addScaledVector(body.velocity, dt);
 }
 
@@ -321,11 +331,13 @@ function presentBody(body: BodyState, alpha: number) {
 
 Interpolate presentation only. Collision and rules always use `current` fixed
 state. For rotations, keep previous/current quaternions and `slerpQuaternions`.
-Run systems in a stable order, for example:
+Initialize `previous` from `current` when an entity spawns or teleports. During
+each fixed step, snapshot all interpolated state before any simulation owner can
+change it, then run systems in a stable order:
 
 ```text
-actions -> player/controllers -> physics/collision -> rules/triggers
--> enemy steering/spawns -> state events -> snapshot previous/current
+action edges -> snapshot previous transforms -> player/controllers
+-> physics/collision -> rules/triggers -> enemy steering/spawns -> state events
 ```
 
 After the fixed loop, update visual animation/VFX, camera, UI/audio bridges,
@@ -487,8 +499,6 @@ bus.on('pickup-collected', (event) => {
 
 Do not spawn meshes or particles inside the pickup collision handler beyond
 updating authoritative score/state.
-the oldest, or grows only at a safe transition; never allocate unpredictably
-during peak combat.
 
 For hundreds of visually identical items, project pool state into an
 `InstancedMesh`. Keep pool slot and `instanceId` aligned, update matrices in one
@@ -497,7 +507,8 @@ batch, and mark `instanceMatrix.needsUpdate` once.
 ### Third-person camera rig
 
 Follow one semantic target, derive a desired boom pose, solve camera collision,
-then smooth. Reuse all temporary values:
+then smooth. This compact center-ray implementation is a baseline for simple,
+authored camera blockers; reuse all temporary values:
 
 ```ts
 class ThirdPersonCamera {
@@ -550,10 +561,58 @@ class ThirdPersonCamera {
 ```
 
 Use a yaw-only gameplay root for the target quaternion unless pitch/roll should
-rotate the boom. Raycast against simple camera blockers on a dedicated layer.
-Snap inward to prevent wall clipping; smooth outward to avoid pops. For a
-camera inside a collider, add an overlap recovery strategy rather than trusting
-one ray.
+rotate the boom. The example computes world-space positions, so keep the camera
+unparented or under an identity transform. `Object3D.lookAt()` is not supported
+under non-uniformly scaled parents. Update moving blocker world matrices before
+the query, and raycast against simple camera blockers on a dedicated layer.
+
+A center ray does not protect the camera body or its near-plane corners. For a
+professional rig, treat the camera as a small sphere and sweep it from the
+target pivot to the desired position through the collision service described in
+`physics.md`. Choose a radius at least as large as the near-plane half diagonal:
+
+```ts
+function minimumCameraProbeRadius(camera: THREE.PerspectiveCamera): number {
+  const halfFov = THREE.MathUtils.degToRad(camera.getEffectiveFOV() * 0.5);
+  const halfHeight = Math.tan(halfFov) * camera.near;
+  const halfWidth = halfHeight * camera.aspect;
+  return Math.hypot(halfWidth, halfHeight);
+}
+
+type CameraSweepHit = {
+  distance: number;          // permitted center distance along the boom
+  normal: THREE.Vector3;
+  startsInside: boolean;
+};
+
+interface CameraCollisionQueries {
+  sweepSphere(
+    start: THREE.Vector3,
+    end: THREE.Vector3,
+    radius: number,
+  ): CameraSweepHit | undefined;
+  recoverSphere(
+    center: THREE.Vector3,
+    radius: number,
+    result: THREE.Vector3,
+  ): boolean;
+}
+```
+
+Use `Math.max(authoredCameraRadius, minimumCameraProbeRadius(camera))`, take the
+nearest permitted boom distance, subtract a small skin, and snap inward before
+smoothing outward. If `startsInside` is true, depenetrate to a valid point or
+restore the last known-safe pose; a sweep alone cannot recover an overlapping
+start. With no volume-query service, cast from the pivot to the desired camera
+center plus its near-plane corners and edge midpoints. Convert each hit distance
+to a fraction of that probe's full length, then apply the smallest safe fraction
+to the boom. This is an approximation and must be tested at corners and low
+ceilings.
+
+Three.js mesh raycasts detect a face only when it points toward the ray origin
+unless its material uses `DoubleSide`. Use closed, consistently wound blocker
+geometry or a dedicated double-sided proxy. Snap inward to prevent wall
+clipping; smooth outward to avoid pops.
 
 Apply camera shake/kick after the stable rig pose as a bounded presentation
 offset. Restore the stable pose every frame so impulses do not accumulate.
@@ -611,10 +670,65 @@ At application shutdown, assert that normal gameplay references reached zero.
 A force-dispose method is acceptable only at final teardown after mixers,
 instances, scenes, and render loops stop.
 
-For animated glTF: the store owns the loaded source resources; a borrower uses
-`SkeletonUtils.clone(source.scene)`, owns its mixer and instance-specific
-materials, then removes the clone and releases the handle. Do not traverse and
-dispose shared source resources from the clone.
+For animated glTF, `SkeletonUtils.clone(source.scene)` makes an independent
+skinned hierarchy and skeleton, but geometry, materials, and the textures
+referenced by those materials remain shared. The store owns those shared source
+resources. Clone and track only a material that this instance will mutate; a
+cloned material still shares its textures unless those textures are cloned too:
+
+```ts
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
+
+const instance = SkeletonUtils.clone(source.scene);
+const ownedMaterials = new Set<THREE.Material>();
+const ownedSkeletons = new Set<THREE.Skeleton>();
+const mutableMaterialMeshes = new Set([
+  'BodyPaint', // validated glTF node name
+]);
+
+instance.traverse((object) => {
+  // SkeletonUtils.clone() created these skeletons for this instance. Never
+  // collect skeletons by traversing source.scene, which remains store-owned.
+  if (object instanceof THREE.SkinnedMesh) {
+    ownedSkeletons.add(object.skeleton);
+  }
+
+  const mesh = object as THREE.Mesh;
+  if (!mesh.isMesh || !mutableMaterialMeshes.has(mesh.name)) return;
+
+  const cloneMaterial = (material: THREE.Material) => {
+    const clone = material.clone();
+    ownedMaterials.add(clone);
+    return clone;
+  };
+
+  mesh.material = Array.isArray(mesh.material)
+    ? mesh.material.map(cloneMaterial)
+    : cloneMaterial(mesh.material);
+});
+
+const mixer = new THREE.AnimationMixer(instance);
+let released = false;
+
+function releaseInstance(): void {
+  if (released) return;
+  released = true;
+  mixer.stopAllAction();
+  mixer.uncacheRoot(instance);
+  instance.removeFromParent();
+  for (const material of ownedMaterials) material.dispose();
+  for (const skeleton of ownedSkeletons) skeleton.dispose();
+  assetHandle.release(); // only the store may dispose shared source resources
+}
+```
+
+Do not clone every material by default: instances that never mutate material
+state should continue sharing the source materials. Do not traverse the clone
+and dispose source geometry, materials, or textures. The release guard makes
+the example idempotent. Remove any mixer event listeners before
+`stopAllAction()` and `uncacheRoot()`. Deduplicate and dispose skeletons found on
+the cloned instance because their bone textures are instance-owned; do not
+dispose skeletons from the store-owned source hierarchy.
 
 ### Enemy steering and wave scheduling
 
@@ -901,7 +1015,9 @@ security system.
 
 Teardown in reverse ownership order:
 
-1. Stop `renderer.setAnimationLoop(null)` and disconnect the `Timer`.
+1. Stop `renderer.setAnimationLoop(null)` and await it when the common renderer
+   is in use, then call `timer.dispose()` to remove the Timer's Page Visibility
+   listener and release its internal resources.
 2. Stop accepting device input; remove listeners and clear action state.
 3. Exit the active game state and cancel transitions/waves.
 4. Stop mixers, audio voices, particles, projectiles, and pooled effects.
@@ -955,5 +1071,8 @@ must happen only after borrowers stop.
 - [GLTFLoader](https://threejs.org/docs/pages/GLTFLoader.html)
 - [SkeletonUtils](https://threejs.org/docs/pages/module-SkeletonUtils.html)
 - [AnimationMixer](https://threejs.org/docs/pages/AnimationMixer.html)
+- [AnimationAction](https://threejs.org/docs/pages/AnimationAction.html)
+- [PerspectiveCamera](https://threejs.org/docs/pages/PerspectiveCamera.html)
+- [Scene graph manual](https://threejs.org/manual/en/scenegraph.html)
 - [Cleanup manual](https://threejs.org/manual/en/cleanup.html)
 - [How to dispose of objects](https://threejs.org/manual/en/how-to-dispose-of-objects.html)

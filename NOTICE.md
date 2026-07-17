@@ -36,16 +36,16 @@ animation, interaction, shaders, and post-processing.
 That repository does not contain a full `LICENSE` file at the studied commit;
 its README contains only a short MIT statement. No substantial expression or
 code was copied from it. Examples in this package were independently authored
-and checked against official Three.js r185+ documentation, source, types, and
-examples.
+and checked against official Three.js r185 documentation, source, and examples,
+plus the separate community-maintained `@types/three` declarations.
 
 ## Official Three.js sources
 
-Version-sensitive technical guidance and small API patterns were checked
-against Three.js r185 and onwards (last verified against npm `three@0.185.1`
-as informational history only), the live official documentation, manual,
-examples, release notes, migration guide, and source. Three.js is MIT
-licensed:
+Version-sensitive technical guidance and small API patterns use Three.js r185
+as the verified baseline (last checked against npm `three@0.185.1`, as
+informational history rather than a permanent pin). Later releases must be
+reconciled with the live official documentation, manual, examples, release
+notes, migration guide, and version-matching source. Three.js is MIT licensed:
 
 Copyright © 2010-2026 three.js authors
 

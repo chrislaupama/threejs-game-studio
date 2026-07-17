@@ -4,6 +4,7 @@ export class Hud {
   private readonly scoreValue = this.getElement('#score-value');
   private readonly targetValue = this.getElement('#target-value');
   private readonly timerValue = this.getElement('#timer-value');
+  private readonly paceValue = this.getElement('#pace-value');
   private readonly statusLine = this.getElement('#status-line');
   private readonly statePanel = this.getElement('#state-panel');
   private readonly stateTitle = this.getElement('#state-title');
@@ -11,12 +12,26 @@ export class Hud {
   private readonly retryButton = this.getElement<HTMLButtonElement>('#retry-button');
   private readonly pauseButton = this.getElement<HTMLButtonElement>('#pause-button');
 
-  update(score: number, target: number, elapsed: number, _timeLimit: number, state: GameState): void {
-    this.scoreValue.textContent = String(score);
-    this.targetValue.textContent = String(target);
-    this.timerValue.textContent = `${elapsed.toFixed(1)}s`;
+  update(
+    score: number,
+    target: number,
+    elapsed: number,
+    _timeLimit: number,
+    state: GameState,
+    speed: number,
+    boosting: boolean,
+    startDelayRemaining: number,
+  ): void {
+    this.setText(this.scoreValue, String(Math.min(score, target)));
+    this.setText(this.targetValue, String(target));
+    this.setText(this.timerValue, `${elapsed.toFixed(1)} s`);
+    this.setText(this.paceValue, `${Math.round(speed)} m/s`);
+    const boostState = String(boosting);
+    if (this.paceValue.dataset.boosting !== boostState) {
+      this.paceValue.dataset.boosting = boostState;
+    }
 
-    this.pauseButton.textContent = state === 'paused' ? 'Resume' : 'Pause';
+    this.setText(this.pauseButton, state === 'paused' ? 'Resume' : 'Pause');
     this.pauseButton.setAttribute('aria-pressed', String(state === 'paused'));
     this.pauseButton.disabled = state === 'won' || state === 'lost';
 
@@ -25,27 +40,34 @@ export class Hud {
     this.retryButton.hidden = !terminal;
 
     if (state === 'won') {
-      this.statusLine.textContent = 'Run cleared';
-      this.stateTitle.textContent = 'Distance locked';
-      this.stateCopy.textContent = 'You held the lane to the finish. Run again for a cleaner line.';
+      this.setText(this.statusLine, 'Sprint complete');
+      this.setText(this.stateTitle, 'Finish line crossed');
+      this.setText(
+        this.stateCopy,
+        'You cleared 120 metres. Sprint again for a faster, cleaner line.',
+      );
     } else if (state === 'lost') {
-      this.statusLine.textContent = 'Wrecked';
-      this.stateTitle.textContent = 'Obstacle hit';
-      this.stateCopy.textContent = 'Steer between crates and dash for speed. Press retry.';
+      this.setText(this.statusLine, 'Impact detected');
+      this.setText(this.stateTitle, 'Runner down');
+      this.setText(
+        this.stateCopy,
+        'Read the open lane, steer clear of barriers, then boost through safe gaps.',
+      );
     } else if (state === 'paused') {
-      this.statusLine.textContent = 'Paused';
-      this.stateTitle.textContent = 'Game paused';
-      this.stateCopy.textContent = 'Press P or Escape to resume.';
+      this.setText(this.statusLine, 'Paused');
+      this.setText(this.stateTitle, 'Game paused');
+      this.setText(this.stateCopy, 'Press P or Escape to resume.');
+    } else if (startDelayRemaining > 0) {
+      this.setText(this.statusLine, 'Ready · choose your opening lane');
+    } else if (boosting) {
+      this.setText(this.statusLine, 'Boost engaged · hold your line');
     } else {
-      this.statusLine.textContent = 'Endless runner · dodge · reach distance';
+      this.setText(this.statusLine, 'Steer · dodge · reach 120 m');
     }
   }
 
-  flashPickup(): void {
-    this.statusLine.animate(
-      [{ borderLeftColor: '#f5ba49' }, { borderLeftColor: '#48baa7' }, { borderLeftColor: '#f5ba49' }],
-      { duration: 180, easing: 'ease-out' },
-    );
+  private setText(element: HTMLElement, value: string): void {
+    if (element.textContent !== value) element.textContent = value;
   }
 
   private getElement<T extends HTMLElement = HTMLElement>(selector: string): T {

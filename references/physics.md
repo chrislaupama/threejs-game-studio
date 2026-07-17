@@ -1,18 +1,20 @@
-# Dependency-Free Physics And Collision
+# Physics And Collision
 
 Use this reference before changing collision-heavy gameplay, projectiles,
-vehicles, ball games, platforms, sensors, or fast movement. New work in this
-skill uses Three.js math and project code—never a newly installed physics
-engine. If an existing project already owns an engine, preserve its established
-world and lifecycle unless the user explicitly requests a migration; do not
-expand the dependency as a shortcut for a mechanic that custom collision can
-handle.
+vehicles, ball games, platforms, sensors, or fast movement. Start with Three.js
+math, official math addons, and project code when those honestly fit. Adding a
+physics engine is an architecture and dependency decision: obtain explicit
+approval, pin and host it according to the project's local-first policy, and
+define its world, stepping, synchronization, teardown, and asset ownership.
+Preserve an engine already owned by an existing project unless migration is in
+scope; do not expand it merely to avoid a small, well-bounded collision query.
 
 ## Contents
 
 - Scope and simulation ownership
 - Fixed stepping and collider data
 - Overlap, sweep, and response patterns
+- Broadphase and official Three.js collision addons
 - Arcade bodies, surfaces, and sensors
 - Diagnostics, verification, and limits
 
@@ -29,9 +31,20 @@ Use authored kinematics and simple colliders for:
 
 Do not pretend a small custom solver provides general rigid-body stacks,
 ragdolls, arbitrary convex contacts, or production vehicle suspension. When a
-requested design fundamentally needs those features, reduce it to an authored
-arcade model or state the pure-Three.js scope limit. Never hide the gap by
-installing a package.
+requested design fundamentally needs those features, choose deliberately:
+
+| Need | Smallest honest model |
+|---|---|
+| triggers, pickups, simple projectiles, rails, authored movement | project-owned overlap/sweep code using `Box3`, `Sphere`, `Ray`, and planes |
+| character against a static triangle world | official `Capsule` plus `Octree`, built from a simplified collision-only scene |
+| rotated rigid bounds without dynamics | official `OBB`, transformed from canonical local bounds |
+| stacks, joints, ragdolls, arbitrary convex dynamics, robust vehicles | explicitly approved and locally pinned physics engine |
+
+Three.js also ships `AmmoPhysics`, `JoltPhysics`, and `RapierPhysics` convenience
+addons. In r185 these automatically import their engines from a CDN. That
+violates an offline/local-first runtime unless the external engine is deliberately
+vendored and the integration adapted. Do not copy those wrappers unchanged into
+a project that promises local-only runtime assets.
 
 ## One Simulation Owner
 
@@ -55,7 +68,7 @@ type SphereCollider = {
   id: number
   center: THREE.Vector3
   radius: number
-  layer: number
+  layer: number // one bit flag, for example 1 << 2; not the ordinal 2
   mask: number
   sensor: boolean
 }
@@ -139,6 +152,85 @@ const shouldTest = (a: SphereCollider, b: SphereCollider) =>
   (a.mask & b.layer) !== 0 && (b.mask & a.layer) !== 0
 ```
 
+`layer` is a bit flag and `mask` is a set of accepted bits. Centralize named
+flags, keep them within JavaScript's 32-bit bitwise range, and test the filter in
+both directions as above.
+
+## Broadphase Before Narrow Phase
+
+Do not compare every dynamic collider with every other collider once counts
+grow. Use a measured broadphase such as a uniform grid/spatial hash for a
+bounded arena, sweep-and-prune for mostly coherent motion, or an `Octree` for a
+static triangle world. A grid insertion spans every cell overlapped by the
+collider's AABB; querying only the center cell misses large bodies and boundary
+contacts. The compact example partitions a ground-based game in XZ; include Y
+cells for free-flight or tall multi-level spaces.
+
+```ts
+const cells = new Map<string, SphereCollider[]>()
+
+function rebuildSphereGrid(colliders: readonly SphereCollider[], cellSize: number) {
+  if (!Number.isFinite(cellSize) || cellSize <= 0) {
+    throw new RangeError('cellSize must be finite and positive')
+  }
+  cells.clear()
+  for (const collider of colliders) {
+    const minX = Math.floor((collider.center.x - collider.radius) / cellSize)
+    const maxX = Math.floor((collider.center.x + collider.radius) / cellSize)
+    const minZ = Math.floor((collider.center.z - collider.radius) / cellSize)
+    const maxZ = Math.floor((collider.center.z + collider.radius) / cellSize)
+    for (let z = minZ; z <= maxZ; z += 1) {
+      for (let x = minX; x <= maxX; x += 1) {
+        const key = `${x},${z}`
+        const bucket = cells.get(key)
+        if (bucket) bucket.push(collider)
+        else cells.set(key, [collider])
+      }
+    }
+  }
+}
+```
+
+Deduplicate candidate pairs by stable sorted IDs because a pair may share more
+than one cell. Measure rebuild cost and candidate count. For a hot loop, pool
+buckets or use integer-keyed typed structures rather than allocating strings and
+arrays each step; the readable version above defines the contract first.
+
+## Official Collision Math Addons
+
+`Capsule`, `Octree`, and `OBB` are explicit addons; they are not properties on
+the `THREE` namespace. Build a static octree from a simplified collision root,
+not a detail-heavy render scene:
+
+```ts
+import { Capsule } from 'three/addons/math/Capsule.js'
+import { Octree } from 'three/addons/math/Octree.js'
+
+staticCollisionRoot.updateWorldMatrix(true, true)
+const worldOctree = new Octree().fromGraphNode(staticCollisionRoot)
+const playerCapsule = new Capsule(
+  new THREE.Vector3(0, 0.35, 0),
+  new THREE.Vector3(0, 1.45, 0),
+  0.35,
+)
+const playerVelocity = new THREE.Vector3()
+const correction = new THREE.Vector3()
+
+function resolvePlayerWorld(): void {
+  const hit = worldOctree.capsuleIntersect(playerCapsule)
+  if (hit === false) return
+  correction.copy(hit.normal).multiplyScalar(hit.depth)
+  playerCapsule.translate(correction)
+  removeIntoSurface(playerVelocity, hit.normal)
+}
+```
+
+`fromGraphNode()` snapshots the supplied world geometry; rebuild it only at a
+controlled transition when static collision geometry changes. `OBB.applyMatrix4()`
+is useful for synchronizing an authored local OBB with an object's world matrix.
+Keep canonical local bounds and copy them before applying a new world transform,
+rather than accumulating transforms into the same OBB.
+
 ## Continuous Tests For Fast Objects
 
 Never rely on end-of-frame overlap when a projectile can travel farther than
@@ -148,7 +240,7 @@ its radius in one step. Test the swept segment from previous to next position.
 const segment = new THREE.Vector3()
 const toCenter = new THREE.Vector3()
 
-function segmentSphereTime(
+function pointSweepSphereTime(
   start: THREE.Vector3,
   end: THREE.Vector3,
   center: THREE.Vector3,
@@ -171,7 +263,27 @@ function segmentSphereTime(
   if (t1 >= 0 && t1 <= 1) return t1
   return null
 }
+
+function sphereSphereSweepTime(
+  movingStart: THREE.Vector3,
+  movingEnd: THREE.Vector3,
+  movingRadius: number,
+  target: SphereCollider,
+): number | null {
+  return pointSweepSphereTime(
+    movingStart,
+    movingEnd,
+    target.center,
+    movingRadius + target.radius,
+  )
+}
 ```
+
+The quadratic helper sweeps a point against a sphere. Sweeping a sphere against
+a sphere uses the sum of radii, as the wrapper shows. If both objects move, use
+relative start/end motion and the combined radius. For sphere-versus-box, expand
+the box by the moving radius before the segment test, then handle rounded edge
+and corner regions when exact contact normals matter.
 
 Choose the earliest hit, move to the contact point, emit one semantic event,
 then stop, reflect, slide, pierce, or consume the remaining time according to
@@ -211,6 +323,11 @@ function reflectVelocity(
 }
 ```
 
+Both formulas require a finite unit-length normal. Normalize once when a contact
+is created or assert `Math.abs(normal.lengthSq() - 1) < epsilon` in development;
+normalizing independently in every response function hides bad collision data
+and wastes hot-loop work.
+
 Apply friction or damping separately and consistently. Avoid multiplying by a
 frame-rate-dependent constant; use exponential decay such as
 `velocity.multiplyScalar(Math.exp(-drag * dt))`.
@@ -249,15 +366,17 @@ a plane, rail segment, height field, or simplified proxy describes the rule.
 Expose enough to reason about behavior:
 
 ```ts
-collision: {
-  model: 'custom-fixed-step',
-  timestep: FIXED_DT,
-  dynamicBodies: bodies.length,
-  colliders: colliders.length,
-  activePairs,
-  sweepTests,
-  droppedSimulationSteps,
-}
+const physicsDiagnostics = {
+  collision: {
+    model: 'custom-fixed-step',
+    timestep: FIXED_DT,
+    dynamicBodies: bodies.length,
+    colliders: colliders.length,
+    activePairs,
+    sweepTests,
+    droppedSimulationSteps,
+  },
+};
 ```
 
 Add a local debug flag that draws wireframe spheres, boxes, capsules, normals,
@@ -286,3 +405,12 @@ simulation and stay gated from release.
 - Pair events fire once per frame instead of enter/stay/exit semantics.
 - Restart leaves stale colliders or contact caches.
 - A custom arcade solver is described as general rigid-body physics.
+
+## Official Documentation
+
+- [Three.js physics manual](https://threejs.org/manual/en/physics.html)
+- [Box3](https://threejs.org/docs/pages/Box3.html) and [Sphere](https://threejs.org/docs/pages/Sphere.html)
+- [Capsule](https://threejs.org/docs/pages/Capsule.html)
+- [Octree](https://threejs.org/docs/pages/Octree.html) and the [official FPS example](https://threejs.org/examples/games_fps.html)
+- [OBB](https://threejs.org/docs/pages/OBB.html)
+- [AmmoPhysics](https://threejs.org/docs/pages/AmmoPhysics.html), [JoltPhysics](https://threejs.org/docs/pages/JoltPhysics.html), and [RapierPhysics](https://threejs.org/docs/pages/RapierPhysics.html)

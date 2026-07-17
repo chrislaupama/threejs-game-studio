@@ -5,14 +5,15 @@ export class AudioSystem {
   private ui: GainNode | null = null;
   private muteButton: HTMLButtonElement | null = null;
   private readonly voices: Array<{ oscillator: OscillatorNode; gain: GainNode }> = [];
+  private unlockPromise: Promise<void> | null = null;
   private unlocked = false;
   private muted = false;
   private unavailable = false;
+  private disposed = false;
 
   private readonly onUnlock = () => {
     void this.unlock().catch(() => {
-      this.unavailable = true;
-      this.cleanupGraph();
+      this.unavailable = !this.getAudioContextClass();
       this.syncMuteUi();
     });
   };
@@ -22,26 +23,27 @@ export class AudioSystem {
   };
 
   constructor() {
-    window.addEventListener('pointerdown', this.onUnlock, { once: true });
-    window.addEventListener('keydown', this.onUnlock, { once: true });
+    // Keep both listeners until a graph is actually running. A rejected resume
+    // can then recover on a later user gesture instead of disabling audio.
+    window.addEventListener('pointerdown', this.onUnlock);
+    window.addEventListener('keydown', this.onUnlock);
   }
 
   async unlock(): Promise<void> {
     if (this.unlocked) return;
-    const AudioContextClass =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (this.disposed) throw new Error('AudioSystem is disposed.');
+    if (this.unlockPromise) return this.unlockPromise;
+
+    const AudioContextClass = this.getAudioContextClass();
     if (!AudioContextClass) throw new Error('Web Audio is unavailable.');
-    this.context = new AudioContextClass();
-    this.master = this.context.createGain();
-    this.sfx = this.context.createGain();
-    this.ui = this.context.createGain();
-    this.master.gain.value = this.muted ? 0 : 0.72;
-    this.sfx.connect(this.master);
-    this.ui.connect(this.master);
-    this.master.connect(this.context.destination);
-    await this.context.resume();
-    this.unlocked = true;
+
+    const pending = this.createAndResumeGraph(AudioContextClass);
+    this.unlockPromise = pending;
+    try {
+      await pending;
+    } finally {
+      if (this.unlockPromise === pending) this.unlockPromise = null;
+    }
   }
 
   pickup(index: number): void {
@@ -72,16 +74,20 @@ export class AudioSystem {
   }
 
   async suspend(): Promise<void> {
+    if (this.unlockPromise) await this.unlockPromise.catch(() => undefined);
     if (this.context?.state === 'running') await this.context.suspend();
   }
 
   async resume(): Promise<void> {
+    if (this.unlockPromise) await this.unlockPromise;
     if (this.unlocked && this.context?.state === 'suspended') {
       await this.context.resume();
     }
   }
 
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     window.removeEventListener('pointerdown', this.onUnlock);
     window.removeEventListener('keydown', this.onUnlock);
     this.muteButton?.removeEventListener('click', this.onMuteClick);
@@ -99,15 +105,65 @@ export class AudioSystem {
     this.unlocked = false;
   }
 
+  private async createAndResumeGraph(
+    AudioContextClass: typeof AudioContext,
+  ): Promise<void> {
+    const context = new AudioContextClass();
+    const master = context.createGain();
+    const sfx = context.createGain();
+    const ui = context.createGain();
+    master.gain.value = this.muted ? 0 : 0.72;
+    sfx.connect(master);
+    ui.connect(master);
+    master.connect(context.destination);
+
+    try {
+      await context.resume();
+      if (this.disposed) {
+        sfx.disconnect();
+        ui.disconnect();
+        master.disconnect();
+        await context.close();
+        return;
+      }
+      // Mute may have changed while resume() was pending.
+      master.gain.value = this.muted ? 0 : 0.72;
+      this.context = context;
+      this.master = master;
+      this.sfx = sfx;
+      this.ui = ui;
+      this.unlocked = true;
+      this.unavailable = false;
+      window.removeEventListener('pointerdown', this.onUnlock);
+      window.removeEventListener('keydown', this.onUnlock);
+      this.syncMuteUi();
+    } catch (error) {
+      sfx.disconnect();
+      ui.disconnect();
+      master.disconnect();
+      if (context.state !== 'closed') await context.close().catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private getAudioContextClass(): typeof AudioContext | undefined {
+    return (
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext
+    );
+  }
+
   private cleanupGraph(): void {
+    const context = this.context;
     this.sfx?.disconnect();
     this.ui?.disconnect();
     this.master?.disconnect();
-    void this.context?.close();
     this.master = null;
     this.sfx = null;
     this.ui = null;
     this.context = null;
+    if (context?.state !== 'closed') void context?.close().catch(() => undefined);
   }
 
   private tone(start: number, end: number, duration: number, type: OscillatorType, volume: number): void {

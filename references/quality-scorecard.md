@@ -8,7 +8,11 @@
 - Thresholds, automatic failures, and measured evidence
 - Fresh-eyes review and report format
 
-Score active-play screenshots, not idle title screens or isolated showroom models. Use desktop and mobile screenshots when mobile is in scope.
+Score complete active-play game-shell screenshots (canvas plus player-facing
+HUD/touch UI), not idle title screens, canvas-only crops, or isolated showroom
+models. Use desktop and mobile screenshots when mobile is in scope, and inspect
+the separate deterministic normal- and reduced-motion captures for categories
+affected by animation or effects.
 
 Scores are self-assessed, so they drift optimistic. Two countermeasures are
 mandatory for polished/premium/showcase claims: cite measured evidence for the
@@ -53,6 +57,21 @@ detail do not raise a score.
 - 2: Premium stylized. Authored silhouettes, material/detail systems, readable state, cohesive UI/world, measured performance.
 - 3: Showcase. Strong art direction, memorable hero and world, dense authored detail, excellent readability, polished VFX/rendering, and diagnostics.
 
+## Applicability Contract
+
+Mark applicability from the written game/design brief **before** looking at the
+result. `N/A` is valid only when the surface is genuinely absent by design —
+for example, obstacles/enemies in a peaceful model viewer, or collectible
+rewards in a narrative scene with no interactables. It is not valid because a
+required surface was omitted, is still a placeholder, or scored poorly.
+
+For every `N/A`, record the design evidence and remove that category from both
+the numerator and denominator. Art direction, world/environment,
+materials/textures, lighting/render, UI/accessibility shell, and performance
+evidence normally remain applicable even in non-combat experiences. Replace
+combat-specific nouns with the closest designed interactive family where
+appropriate rather than forcing irrelevant enemy or pickup counts.
+
 ## Categories
 
 1. Art direction.
@@ -68,13 +87,17 @@ detail do not raise a score.
 3. Obstacles/enemies.
    - 0: Cubes/cones/spheres.
    - 1: Recolored repeated silhouette.
-   - 2: Three readable variants with telegraphs and material cues.
-   - 3: Varied family with animation, anticipation, and gameplay clarity.
+   - 2: The authored family breadth promised by the design brief is present,
+     with readable telegraphs and material cues.
+   - 3: Memorable variation, animation, anticipation, and gameplay clarity at
+     the encounter density the design actually ships.
 4. Rewards/interactables.
    - 0: Plain sphere/ring/token.
    - 1: Repeated object with simple glow.
-   - 2: Two authored forms with idle/collect states and UI feedback.
-   - 3: Desirable, animated, and clearly valued during motion.
+   - 2: The design-required interactable/reward family has authored forms,
+     idle/activation states, and UI feedback.
+   - 3: Each designed value/state reads immediately during motion and the
+     family remains desirable without relying on color alone.
 5. World/environment.
    - 0: Flat plane, empty arena, box skyline.
    - 1: Themed but sparse repeated blocks.
@@ -110,16 +133,17 @@ detail do not raise a score.
 
 Premium:
 
-- Every category at least 2.
-- Average at least 2.3.
+- Every applicable category at least 2.
+- Average across applicable categories at least 2.3.
 - Desktop and mobile active-play screenshots captured when mobile is in scope.
 - Renderer diagnostics reported after graphics changes.
+- Every `N/A` is justified against the prewritten design brief.
 
 Showcase:
 
-- At least six categories score 3.
-- No category below 2.
-- Average at least 2.7.
+- At least `ceil(0.6 * applicable categories)` score 3 (six when all ten apply).
+- No applicable category below 2.
+- Average across applicable categories at least 2.7.
 - Performance evidence includes before/after or budget-aware notes.
 
 ## Automatic Failures
@@ -129,12 +153,15 @@ Any of these prevents a polished/premium/showcase claim:
 - Active screenshot is primitive-dominant.
 - Main world is mostly stretched boxes, flat planes, or a sparse arena.
 - Hero asset is mostly default primitives plus glow.
-- Obstacles or rewards are one repeated silhouette.
+- A design-required obstacle, enemy, reward, or interactable family collapses
+  to one repeated silhouette without a documented gameplay reason.
 - HUD is mostly rectangular stat/debug cards.
 - Fog, darkness, bloom, or particles hide missing authored geometry.
 - UI overlaps the play path, clips text, or fails mobile safe areas.
 - The game is not playable through real input.
 - No active-play screenshot was captured.
+- Only a canvas crop or reduced-motion capture was used to claim full-shell,
+  UI, or default-motion quality.
 - No renderer diagnostics were collected after major graphics work.
 - No technical-art budget or imported-local-asset diagnostics were reported for
   premium graphics work.
@@ -166,25 +193,44 @@ The builder must not be the only grader. For polished/premium/showcase claims:
 - If the runner supports subagents (Task tool or equivalent), spawn a reviewer with ONLY: the screenshots, this scorecard file, and the inspector metrics JSON. No build context, no prior scores. The reviewer must receive the COMPLETE capture set — every captured state, desktop and mobile — never a hand-picked subset; a curated selection can hide weak states or miss content the builder knows exists (capture states with the inspector's `--state` flag so nothing is gated behind live play). The reviewer fills the scorecard independently; reconcile by taking the lower score per category unless concrete evidence overturns it. Report both score sets.
 - If subagents are unavailable, run an adversarial self-review before finalizing: for each category, write one sentence making the strongest case that the score is a 1, citing what is visible in the screenshot; only then assign the score. Include these sentences in the report.
 
+## Score-Fix-Measure Loop
+
+One scoring pass is a diagnosis, not completion. Repeat this bounded loop:
+
+1. Capture the complete deterministic desktop/mobile state set and record
+   renderer/performance evidence.
+2. Score all applicable categories and list automatic failures.
+3. Fix the lowest applicable category or highest-impact automatic failure.
+4. Rebuild, replay through real input, recapture the same states, and remeasure
+   the same budget scene.
+5. Repeat until the requested threshold passes with no automatic failure, or
+   report the exact blocker and next pass.
+
+Do not average away a category below the floor, reuse a pre-fix measurement,
+or stop because the first visual change looks subjectively better.
+
 ## Report Format
 
 ```text
 Visual scorecard:
-- Art direction: before X / after Y - evidence:
-- Hero/player: before X / after Y - evidence:
-- Obstacles/enemies: before X / after Y - evidence:
-- Rewards/interactables: before X / after Y - evidence:
-- World/environment: before X / after Y - evidence:
-- Materials/textures: before X / after Y - evidence:
-- Lighting/render: before X / after Y - evidence:
-- VFX/motion: before X / after Y - evidence:
-- UI/HUD: before X / after Y - evidence:
-- Performance evidence: before X / after Y - evidence:
+- Art direction [applicable]: before X / after Y - evidence:
+- Hero/player [applicable or N/A + design reason]: before X / after Y - evidence:
+- Obstacles/enemies [applicable or N/A + design reason]: before X / after Y - evidence:
+- Rewards/interactables [applicable or N/A + design reason]: before X / after Y - evidence:
+- World/environment [applicable]: before X / after Y - evidence:
+- Materials/textures [applicable]: before X / after Y - evidence:
+- Lighting/render [applicable]: before X / after Y - evidence:
+- VFX/motion [applicable or N/A + design reason]: before X / after Y - evidence:
+- UI/HUD [applicable]: before X / after Y - evidence:
+- Performance evidence [applicable]: before X / after Y - evidence:
 Measured evidence: colorEntropyBits / edgeDensity / luminance.contrast /
   dominantColorShare per viewport, renderer diagnostics, render budget rows
 Fresh-eyes review: subagent scores or adversarial self-review notes
-Average:
+Applicable categories / N/A reasons:
+Average (applicable denominator only):
 Automatic failures remaining:
+Iterations and score/metric delta per pass:
 ```
 
-If any category remains below threshold, state the exact next pass instead of declaring completion.
+If any applicable category remains below threshold, state the exact next pass
+instead of declaring completion.

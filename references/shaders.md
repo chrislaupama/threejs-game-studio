@@ -13,10 +13,17 @@
 - Porting GLSL concepts to TSL
 - Performance, fallback, and QA gates
 
-Target **Three.js r185+** (verify against the installed revision). Keep shader
-source, textures, lookup data, and generated noise modules in the project. Never
-load shader strings, textures, presets, or post-processing code from a runtime
-URL.
+This cookbook is verified against **Three.js r185**. Confirm the installed
+revision and recheck the official API, source, types, migration notes, and
+examples on every upgrade. Keep shader source, textures, lookup data, and
+generated noise modules in the project. Never load shader strings, textures,
+presets, or post-processing code from a runtime URL.
+
+Public APIs in this cookbook should follow the installed documentation.
+Implementation details—shader-chunk injection points, node setup ordering,
+target ownership, and runtime methods missing from community types—are verified
+for r185 only and must be rechecked against source, types, migration notes, and
+official examples on every upgrade.
 
 Texture-loading examples use the project-owned `publicAssetUrl()` helper from
 `local-assets.md`; import it from the local asset boundary in real code.
@@ -109,10 +116,13 @@ every frame. Share one material when all objects share values. Use instanced
 attributes, vertex colors, a data texture, or separate material instances when
 values must differ per object.
 
-Shader chunks are renderer implementation details. Confirm their names against
-the installed r185.1 package and typecheck/render-test after every Three.js
-upgrade. The [ShaderChunk API](https://threejs.org/docs/pages/ShaderChunk.html)
-lists current chunks but does not make arbitrary injection points stable.
+Shader chunks and their injection locations are renderer implementation details;
+the example above is pinned to r185. Confirm their names and placement against
+the installed Three.js source, then typecheck and render-test after every
+upgrade. The
+[r185 ShaderChunk source](https://github.com/mrdoob/three.js/blob/r185/src/renderers/shaders/ShaderChunk.js)
+lists the verified-baseline chunks but does not make arbitrary injection points
+stable.
 
 ## Texture Sampling And Color
 
@@ -146,9 +156,18 @@ non-color space. Read the official
 [color-management guide](https://threejs.org/manual/en/color-management.html)
 before mixing texture, uniform, vertex, and framebuffer color.
 
-Do not apply gamma or sRGB conversion twice. With WebGL `EffectComposer`, keep
-`OutputPass` last. Without post-processing, keep the shader's output chunks for
-display-facing materials.
+Do not apply gamma or sRGB conversion twice. With WebGL `EffectComposer`, put
+`OutputPass` near the end so tone mapping and output conversion happen once,
+but order display-referred antialiasing by its documented input space:
+
+- `SMAAPass` works in Linear-sRGB and must run **before** `OutputPass`.
+- `FXAAPass` expects sRGB input and must run **after** `OutputPass`.
+
+Without post-processing, keep the shader's output chunks for display-facing
+materials. See the official
+[OutputPass](https://threejs.org/docs/pages/OutputPass.html),
+[FXAAPass](https://threejs.org/docs/pages/FXAAPass.html), and
+[SMAAPass](https://threejs.org/docs/pages/SMAAPass.html) contracts.
 
 ## RawShaderMaterial Boundary
 
@@ -324,6 +343,8 @@ import * as THREE from 'three/webgpu';
 import { color, mix, texture, time, uniform, uv } from 'three/tsl';
 
 const renderer = new THREE.WebGPURenderer({ antialias: true, alpha: false });
+// This renderer's later pipeline enters XR, so select XRManager before init.
+renderer.xr.enabled = true;
 await renderer.init();
 await renderer.setAnimationLoop(render);
 ```
@@ -423,14 +444,28 @@ For selective bloom, configure MRT outputs such as `output` and `emissive`,
 bloom only the emissive texture, then add it to the scene color. Follow the
 official [BloomNode](https://threejs.org/docs/pages/BloomNode.html) example.
 
+Complete pass configuration before optional precompilation. Calls such as
+`setMRT()` and `getTextureNode()` must happen before
+`await scenePass.compileAsync(renderer)`. `renderer.compileAsync(scene, camera)`
+precompiles scene materials; `PassNode.compileAsync()` additionally prepares
+the configured post pass.
+
+Changing uniform values updates the existing graph. Replacing `outputNode` or
+the graph after its first render requires explicit invalidation:
+
+```ts
+pipeline.outputNode = nextOutputNode;
+pipeline.needsUpdate = true;
+```
+
 `RenderPipeline` applies output tone mapping and color conversion by default.
 If an effect needs display-referred input before the end, insert
 [`renderOutput`](https://threejs.org/docs/pages/RenderOutputNode.html) at that
 point and set `pipeline.outputColorTransform = false`. Never transform twice.
 
-Use `packNormalToRGB()` and `unpackRGBToNormal()` in r185.1; reject deprecated
-`directionToColor()` and `colorToDirection()`. Use current `BloomNode`; reject
-removed `AnamorphicNode` recipes.
+Use `packNormalToRGB()` and `unpackRGBToNormal()` in the installed revision;
+reject deprecated `directionToColor()` and `colorToDirection()`. Use current
+`BloomNode`; reject removed `AnamorphicNode` recipes.
 
 ### Resize and dispose the WebGPU pipeline
 
@@ -482,12 +517,14 @@ releases its full-screen material; render/effect nodes with their own targets
 must also be disposed explicitly:
 
 ```ts
-function disposeWebGpuRendering() {
-  void renderer.setAnimationLoop(null);
-  pipeline.dispose();
+async function disposeWebGpuRendering() {
+  const session = renderer.xr.getSession();
+  if (session) await session.end();
+  await renderer.setAnimationLoop(null);
   // Runtime BloomNode has dispose(); some @types/three releases omit it.
   if ('dispose' in glow && typeof glow.dispose === 'function') glow.dispose();
   scenePass.dispose();
+  pipeline.dispose();
   renderer.dispose();
 }
 ```
@@ -508,10 +545,19 @@ Port intent, not syntax:
 | UV sampling | `texture(map, uvNode)` |
 | Arithmetic | Node methods such as `.mul()`, `.add()`, `.sin()` or TSL functions |
 | Varying/object position | Use current position/normal/model nodes from TSL |
+| `material.positionNode` that must preserve morphing, skinning, displacement, batching, or instancing | Modify `positionLocal`; `positionGeometry` is the raw, pre-transform geometry attribute |
 | Built-in PBR extension | Assign `colorNode`, `normalNode`, `emissiveNode`, `roughnessNode`, and related hooks |
 | Full-screen effect | Compose nodes in `RenderPipeline` |
 | MRT | `pass()`, `setMRT(mrt({...}))`, and `getTextureNode(name)` |
 | Compute | Build a TSL compute node and dispatch through the initialized renderer |
+
+In r185, `NodeMaterial` applies its built-in morph, skinning, displacement,
+batch, and instance transforms to `positionLocal` before evaluating
+`material.positionNode`. Base an additive deformation on `positionLocal` to
+preserve those transforms. Use `positionGeometry` only when raw attribute-space
+input is intentional and the custom position fully owns any transformations it
+still needs. This setup order is an r185 implementation detail; re-verify it on
+upgrade.
 
 Do not transliterate shader chunks or copy GLSL preprocessor branches into
 TSL. Identify inputs, coordinate spaces, material outputs, render-pass outputs,
@@ -519,7 +565,7 @@ and update cadence, then rebuild those semantics with current nodes.
 
 Use the official [TSL specification](https://threejs.org/docs/TSL.html) as the
 primary API surface. TSL changes quickly; verify every imported symbol against
-the installed r185.1 exports and matching official example.
+the installed revision's exports and matching official example.
 
 ## Shader Diagnostics
 

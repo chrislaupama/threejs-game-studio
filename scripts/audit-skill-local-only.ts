@@ -3,16 +3,20 @@
 
 import {
   existsSync,
+  lstatSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   statSync,
 } from "node:fs";
 import { extname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 const TEXT_SUFFIXES = new Set([
   ".css",
   ".frag",
+  ".gltf",
   ".glsl",
   ".html",
   ".cjs",
@@ -28,6 +32,9 @@ const TEXT_SUFFIXES = new Set([
   ".svg",
   ".ts",
   ".tsx",
+  ".vue",
+  ".svelte",
+  ".astro",
   ".txt",
   ".vert",
   ".yaml",
@@ -36,8 +43,10 @@ const TEXT_SUFFIXES = new Set([
 
 const SKIP_DIRS = new Set([
   ".git",
+  ".e2e-dist",
   ".vite",
-  "dist",
+  "artifacts",
+  "coverage",
   "node_modules",
   "playwright-report",
   "test-results",
@@ -52,6 +61,7 @@ const EXEMPT_PATHS = new Set([
   "scripts/audit-skill-local-only.test.ts",
   "scripts/audit-local-only.ts",
   "scripts/audit-local-only.test.ts",
+  "scripts/audit-official-links.test.ts",
   "scripts/audit-skill-structure.ts",
   "scripts/audit-skill-structure.test.ts",
   "assets/threejs-vite-game/scripts/audit-local-only.ts",
@@ -105,11 +115,26 @@ const NETWORK_CLIENT =
 const JAVASCRIPT_NETWORK_CLIENT = new RegExp(
   [
     String.raw`^\s*(?:import\b[^\n]*?\bfrom\s*|import\s*\(\s*|import\s*|(?:const|let|var)\b[^\n=]*=\s*require\s*\(\s*)['"](?:node:)?(?:dgram|dns(?:/promises)?|http|http2|https|net|tls|undici|node-fetch|axios|got|superagent|ws)['"]`,
-    String.raw`\b(?:fetch|sendBeacon)\s*(?:\?\.)?\s*\(`,
+    String.raw`\b(?:import|require)\s*\(\s*['"](?:node:)?(?:dgram|dns(?:/promises)?|http|http2|https|net|tls|undici|node-fetch|axios|got|superagent|ws)['"]`,
     String.raw`\bnew\s+(?:XMLHttpRequest|WebSocket|EventSource|WebTransport|RTCPeerConnection)\b`,
   ].join("|"),
   "gim",
 );
+// Built bundles legitimately contain local asset-loading helpers (notably
+// Three.js FileLoader and Vite's module-preload shim), so a blanket `fetch(`
+// match would make checked-in production builds impossible to audit. Still
+// scan bundles for network-capable imports and persistent/realtime clients;
+// literal remote fetch targets are caught by the URL scan below.
+const BUNDLED_JAVASCRIPT_NETWORK_CLIENT = new RegExp(
+  [
+    String.raw`^\s*(?:import\b[^\n]*?\bfrom\s*|import\s*\(\s*|import\s*|(?:const|let|var)\b[^\n=]*=\s*require\s*\(\s*)['"](?:node:)?(?:dgram|dns(?:/promises)?|http|http2|https|net|tls|undici|node-fetch|axios|got|superagent|ws)['"]`,
+    String.raw`\b(?:import|require)\s*\(\s*['"](?:node:)?(?:dgram|dns(?:/promises)?|http|http2|https|net|tls|undici|node-fetch|axios|got|superagent|ws)['"]`,
+    String.raw`\bnew\s+(?:WebSocket|EventSource|WebTransport|RTCPeerConnection)\b`,
+  ].join("|"),
+  "gim",
+);
+const SOURCE_MAP_DIRECTIVE =
+  /(?:\/\/[#@]|\/\*[#@])\s*sourceMappingURL\s*=\s*([^\s*]+)/g;
 const JAVASCRIPT_SUFFIXES = new Set([
   ".cjs",
   ".js",
@@ -119,7 +144,11 @@ const JAVASCRIPT_SUFFIXES = new Set([
   ".cts",
   ".ts",
   ".tsx",
+  ".vue",
+  ".svelte",
+  ".astro",
 ]);
+const COMPONENT_SUFFIXES = new Set([".vue", ".svelte", ".astro"]);
 
 const CANONICAL_REPOSITORY_URL =
   "https://github.com/chrislaupama/threejs-game-studio";
@@ -149,6 +178,288 @@ function excerptFor(text: string, offset: number): string {
   const followingNewline = text.indexOf("\n", offset);
   const end = followingNewline === -1 ? text.length : followingNewline;
   return text.slice(start, end).trim().slice(0, 180);
+}
+
+/** Mask JS/TS comments without changing offsets; runtime URL strings remain. */
+export function stripJavaScriptComments(text: string): string {
+  const output = text.split("");
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest,
+    false,
+    ts.LanguageVariant.JSX,
+    text,
+  );
+  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+    if (
+      token !== ts.SyntaxKind.SingleLineCommentTrivia &&
+      token !== ts.SyntaxKind.MultiLineCommentTrivia
+    ) {
+      continue;
+    }
+    for (let index = scanner.getTokenPos(); index < scanner.getTextPos(); index += 1) {
+      if (output[index] !== "\n" && output[index] !== "\r") output[index] = " ";
+    }
+  }
+  return output.join("");
+}
+
+interface DecodedString {
+  value: string;
+  offset: number;
+  end: number;
+}
+
+/**
+ * Parse JSON string tokens so URL checks see decoded values. This closes the
+ * common `https:\/\/host` escape bypass while retaining source offsets for
+ * useful diagnostics. TypeScript's JSON parser is tolerant enough to return
+ * the valid string tokens surrounding an unrelated syntax error; structural
+ * glTF validation belongs to audit-gltf-assets.ts.
+ */
+function decodedRuntimeStrings(path: string, text: string): DecodedString[] {
+  const suffix = extname(path).toLowerCase();
+  const source = suffix === ".json" || suffix === ".gltf"
+    ? ts.parseJsonText(path, text)
+    : ts.createSourceFile(
+      path,
+      text,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX,
+    );
+  const strings: DecodedString[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node)) {
+      strings.push({
+        value: node.text,
+        offset: node.getStart(source),
+        end: node.end,
+      });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return strings;
+}
+
+function maskOutsideRanges(
+  text: string,
+  ranges: ReadonlyArray<readonly [number, number]>,
+): string {
+  const output: string[] = text.split("").map((character) =>
+    character === "\n" || character === "\r" ? character : " ",
+  );
+  for (const [start, end] of ranges) {
+    for (let index = start; index < end; index += 1) output[index] = text[index] ?? " ";
+  }
+  return output.join("");
+}
+
+function executableSource(path: string, text: string): string {
+  const suffix = extname(path).toLowerCase();
+  if (!COMPONENT_SUFFIXES.has(suffix)) return text;
+  const ranges: Array<readonly [number, number]> = [];
+  if (suffix === ".astro") {
+    const frontmatter = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
+    if (frontmatter?.[1] !== undefined) {
+      const start = frontmatter.index + frontmatter[0].indexOf(frontmatter[1]);
+      ranges.push([start, start + frontmatter[1].length]);
+    }
+  }
+  for (const match of text.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi)) {
+    const body = match[1] ?? "";
+    const start = match.index + match[0].indexOf(body);
+    ranges.push([start, start + body.length]);
+  }
+  return maskOutsideRanges(text, ranges);
+}
+
+function unwrapConstantExpression(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current)
+    || ts.isAsExpression(current)
+    || ts.isTypeAssertionExpression(current)
+    || ts.isNonNullExpression(current)
+    || ts.isSatisfiesExpression(current)
+  ) current = current.expression;
+  return current;
+}
+
+function constantString(
+  expression: ts.Expression,
+  constants: ReadonlyMap<string, string>,
+): string | undefined {
+  const value = unwrapConstantExpression(expression);
+  if (ts.isStringLiteralLike(value) || ts.isNoSubstitutionTemplateLiteral(value)) {
+    return value.text;
+  }
+  if (
+    ts.isBinaryExpression(value)
+    && value.operatorToken.kind === ts.SyntaxKind.PlusToken
+  ) {
+    const left = constantString(value.left, constants);
+    const right = constantString(value.right, constants);
+    return left === undefined || right === undefined ? undefined : left + right;
+  }
+  if (ts.isTemplateExpression(value)) {
+    let result = value.head.text;
+    for (const span of value.templateSpans) {
+      const expressionValue = constantString(span.expression, constants);
+      if (expressionValue === undefined) return undefined;
+      result += expressionValue + span.literal.text;
+    }
+    return result;
+  }
+  if (ts.isIdentifier(value)) return constants.get(value.text);
+  return undefined;
+}
+
+function memberName(expression: ts.Expression): string | undefined {
+  if (ts.isIdentifier(expression)) return expression.text;
+  if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
+  if (
+    ts.isElementAccessExpression(expression)
+    && expression.argumentExpression
+    && ts.isStringLiteralLike(expression.argumentExpression)
+  ) return expression.argumentExpression.text;
+  return undefined;
+}
+
+function isLocalNetworkTarget(value: string): boolean {
+  if (/^(?:data|blob):/i.test(value)) return true;
+  if (/^(?:https?|wss?):\/\//i.test(value)) return ALLOWED_LOCAL_URL.test(value);
+  if (/^\/\//.test(value)) return ALLOWED_LOCAL_URL.test(`http:${value}`);
+  return !/^[a-z][a-z\d+.-]*:/i.test(value);
+}
+
+function hasValidatedLoopbackFetch(
+  call: ts.CallExpression,
+  target: ts.Expression,
+  source: ts.SourceFile,
+  text: string,
+): boolean {
+  if (!ts.isIdentifier(target)) return false;
+  if (
+    !text.includes("function localPreviewAddress")
+    || !text.includes('url.protocol !== "http:"')
+    || !text.includes('"127.0.0.1"')
+    || !text.includes('"localhost"')
+    || !text.includes('"::1"')
+  ) return false;
+  let current: ts.Node | undefined = call;
+  while (current) {
+    if (
+      ts.isFunctionLike(current)
+      && "body" in current
+      && current.body?.getText(source).includes(
+        `localPreviewAddress(${target.text})`,
+      )
+    ) return true;
+    current = current.parent;
+  }
+  return false;
+}
+
+function auditJavaScriptNetworkTargets(
+  sourceText: string,
+  originalText: string,
+  relativePath: string,
+  built: boolean,
+): Finding[] {
+  const source = ts.createSourceFile(
+    relativePath,
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  const declarations = new Map<string, ts.Expression>();
+  const constants = new Map<string, string>();
+  const xhrVariables = new Set<string>();
+  const collect = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      if ((node.parent.flags & ts.NodeFlags.Const) !== 0) {
+        declarations.set(node.name.text, node.initializer);
+      }
+      const initializer = unwrapConstantExpression(node.initializer);
+      if (
+        ts.isNewExpression(initializer)
+        && memberName(initializer.expression) === "XMLHttpRequest"
+      ) xhrVariables.add(node.name.text);
+    }
+    ts.forEachChild(node, collect);
+  };
+  collect(source);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [name, expression] of declarations) {
+      if (constants.has(name)) continue;
+      const value = constantString(expression, constants);
+      if (value !== undefined) {
+        constants.set(name, value);
+        changed = true;
+      }
+    }
+  }
+
+  const findings: Finding[] = [];
+  const record = (
+    call: ts.CallExpression | ts.NewExpression,
+    target: ts.Expression | undefined,
+    sink: string,
+  ): void => {
+    if (!target) return;
+    const value = constantString(target, constants);
+    if (value !== undefined) {
+      if (isLocalNetworkTarget(value)) return;
+      findings.push({
+        path: relativePath,
+        line: lineFor(originalText, target.getStart(source)),
+        reason: "non-local network target",
+        excerpt: value.slice(0, 180),
+      });
+      return;
+    }
+    if (
+      sink === "fetch"
+      && built
+      && ts.isPropertyAccessExpression(target)
+      && target.name.text === "href"
+      && sourceText.includes("modulepreload")
+    ) return;
+    if (
+      sink === "fetch"
+      && ts.isCallExpression(call)
+      && hasValidatedLoopbackFetch(call, target, source, sourceText)
+    ) return;
+    if (!built || sink !== "xhr.open") {
+      findings.push({
+        path: relativePath,
+        line: lineFor(originalText, target.getStart(source)),
+        reason: "network client command/import",
+        excerpt: excerptFor(originalText, target.getStart(source)),
+      });
+    }
+  };
+  const inspect = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const name = memberName(node.expression);
+      if (name === "fetch" || name === "sendBeacon") {
+        record(node, node.arguments[0], name);
+      }
+      if (
+        name === "open"
+        && ts.isPropertyAccessExpression(node.expression)
+        && ts.isIdentifier(node.expression.expression)
+        && xhrVariables.has(node.expression.expression.text)
+      ) record(node, node.arguments[1], "xhr.open");
+    }
+    ts.forEachChild(node, inspect);
+  };
+  inspect(source);
+  return findings;
 }
 
 /**
@@ -193,23 +504,17 @@ export function filesToScan(root: string): string[] {
   function visit(directory: string): void {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const absolutePath = resolve(directory, entry.name);
-      if (entry.isDirectory()) {
-        if (!SKIP_DIRS.has(entry.name)) visit(absolutePath);
+      const relativePath = toPortablePath(relative(root, absolutePath));
+      if (SKIP_DIRS.has(entry.name) || SKIP_NAMES.has(entry.name)) continue;
+      if (entry.isSymbolicLink()) {
+        if (!EXEMPT_PATHS.has(relativePath)) files.push(absolutePath);
         continue;
       }
-
-      let isFile = entry.isFile();
-      if (entry.isSymbolicLink()) {
-        try {
-          isFile = statSync(absolutePath).isFile();
-        } catch {
-          isFile = false;
-        }
+      if (entry.isDirectory()) {
+        visit(absolutePath);
+        continue;
       }
-      if (!isFile) continue;
-
-      const relativePath = toPortablePath(relative(root, absolutePath));
-      if (EXEMPT_PATHS.has(relativePath) || SKIP_NAMES.has(entry.name)) continue;
+      if (!entry.isFile() || EXEMPT_PATHS.has(relativePath)) continue;
       if (
         TEXT_SUFFIXES.has(extname(entry.name).toLowerCase())
         || entry.name === "package.json"
@@ -232,6 +537,19 @@ export function auditFile(path: string, root: string): Finding[] {
   const filename = relativePath.split("/").at(-1) ?? relativePath;
   const findings: Finding[] = [];
 
+  try {
+    if (lstatSync(path).isSymbolicLink()) {
+      return [{
+        path: relativePath,
+        line: 1,
+        reason: "symbolic link is not allowed",
+        excerpt: "replace the link with an in-package file or directory",
+      }];
+    }
+  } catch {
+    // The normal read error below provides the actionable diagnostic.
+  }
+
   if (FORBIDDEN_FILENAME.test(filename)) {
     findings.push({
       path: relativePath,
@@ -253,6 +571,11 @@ export function auditFile(path: string, root: string): Finding[] {
     }];
   }
 
+  const suffix = extname(path).toLowerCase();
+  const javascript = JAVASCRIPT_SUFFIXES.has(suffix);
+  const runtimeText = executableSource(path, text);
+  const urlText = javascript ? stripJavaScriptComments(runtimeText) : runtimeText;
+
   for (const [reason, pattern] of CONTENT_PATTERNS) {
     for (const match of text.matchAll(pattern)) {
       const offset = match.index;
@@ -265,45 +588,90 @@ export function auditFile(path: string, root: string): Finding[] {
     }
   }
 
-  for (const match of text.matchAll(REMOTE_URL)) {
-    const offset = match.index;
-    const value = match[0].replace(/[.,;]+$/, "");
-    if (
-      ALLOWED_NAMESPACE_URLS.has(value)
-      || ALLOWED_LOCAL_URL.test(value)
-      || isAllowedDocumentationUrl(relativePath, value)
-    ) {
-      continue;
+  const recordUrls = (valueText: string, sourceOffset = 0): void => {
+    for (const match of valueText.matchAll(REMOTE_URL)) {
+      const diagnosticOffset = sourceOffset === 0 ? match.index : sourceOffset;
+      const value = match[0].replace(/[.,;]+$/, "");
+      if (
+        ALLOWED_NAMESPACE_URLS.has(value)
+        || ALLOWED_LOCAL_URL.test(value)
+        || isAllowedDocumentationUrl(relativePath, value)
+      ) {
+        continue;
+      }
+      findings.push({
+        path: relativePath,
+        line: lineFor(text, diagnosticOffset),
+        reason: "non-local URL",
+        excerpt: value.slice(0, 180),
+      });
     }
-    findings.push({
-      path: relativePath,
-      line: lineFor(text, offset),
-      reason: "non-local URL",
-      excerpt: value.slice(0, 180),
-    });
+
+    for (const match of valueText.matchAll(PROTOCOL_RELATIVE_URL)) {
+      const diagnosticOffset = sourceOffset === 0 ? match.index : sourceOffset;
+      const value = match[0];
+      if (ALLOWED_LOCAL_URL.test(`http:${value}`)) continue;
+      findings.push({
+        path: relativePath,
+        line: lineFor(text, diagnosticOffset),
+        reason: "protocol-relative URL",
+        excerpt: value.slice(0, 180),
+      });
+    }
+
+    for (const match of valueText.matchAll(PROTOCOL_RELATIVE_USERINFO_URL)) {
+      const diagnosticOffset = sourceOffset === 0 ? match.index : sourceOffset;
+      const value = match[0];
+      findings.push({
+        path: relativePath,
+        line: lineFor(text, diagnosticOffset),
+        reason: "protocol-relative URL",
+        excerpt: value.slice(0, 180),
+      });
+    }
+  };
+
+  recordUrls(urlText);
+  if (javascript || suffix === ".json" || suffix === ".gltf") {
+    for (const item of decodedRuntimeStrings(path, runtimeText)) {
+      if (runtimeText.slice(item.offset, item.end).includes(item.value)) continue;
+      recordUrls(item.value, item.offset);
+    }
   }
 
-  for (const match of text.matchAll(PROTOCOL_RELATIVE_URL)) {
-    const offset = match.index;
-    const value = match[0];
-    if (ALLOWED_LOCAL_URL.test(`http:${value}`)) continue;
-    findings.push({
-      path: relativePath,
-      line: lineFor(text, offset),
-      reason: "protocol-relative URL",
-      excerpt: value.slice(0, 180),
-    });
-  }
-
-  for (const match of text.matchAll(PROTOCOL_RELATIVE_USERINFO_URL)) {
-    const offset = match.index;
-    const value = match[0];
-    findings.push({
-      path: relativePath,
-      line: lineFor(text, offset),
-      reason: "protocol-relative URL",
-      excerpt: value.slice(0, 180),
-    });
+  // A source-map directive is executable tooling metadata, not a research
+  // citation. Inspect it before comments are masked and reject only remote
+  // targets, leaving normal comments and local/data source maps alone.
+  if (javascript) {
+    const hasRemoteUrl = (value: string): boolean =>
+      new RegExp(REMOTE_URL.source, "i").test(value);
+    const hasProtocolRelativeUrl = (value: string): boolean =>
+      new RegExp(
+        `${PROTOCOL_RELATIVE_URL.source}|${PROTOCOL_RELATIVE_USERINFO_URL.source}`,
+        "i",
+      ).test(value);
+    for (const match of runtimeText.matchAll(SOURCE_MAP_DIRECTIVE)) {
+      const value = (match[1] ?? "").replace(/\*\/$/, "").trim();
+      if (!value) continue;
+      if (hasRemoteUrl(value) && !ALLOWED_LOCAL_URL.test(value)) {
+        findings.push({
+          path: relativePath,
+          line: lineFor(text, match.index),
+          reason: "non-local source map URL",
+          excerpt: value.slice(0, 180),
+        });
+      } else if (
+        hasProtocolRelativeUrl(value)
+        && !ALLOWED_LOCAL_URL.test(`http:${value}`)
+      ) {
+        findings.push({
+          path: relativePath,
+          line: lineFor(text, match.index),
+          reason: "non-local source map URL",
+          excerpt: value.slice(0, 180),
+        });
+      }
+    }
   }
 
   if (new Set([".py", ".sh"]).has(extname(path).toLowerCase())) {
@@ -318,8 +686,12 @@ export function auditFile(path: string, root: string): Finding[] {
     }
   }
 
-  if (JAVASCRIPT_SUFFIXES.has(extname(path).toLowerCase())) {
-    for (const match of text.matchAll(JAVASCRIPT_NETWORK_CLIENT)) {
+  const isBuiltArtifact = relativePath.split("/").includes("dist");
+  if (javascript) {
+    const networkPattern = isBuiltArtifact
+      ? BUNDLED_JAVASCRIPT_NETWORK_CLIENT
+      : JAVASCRIPT_NETWORK_CLIENT;
+    for (const match of urlText.matchAll(networkPattern)) {
       const offset = match.index;
       findings.push({
         path: relativePath,
@@ -328,6 +700,14 @@ export function auditFile(path: string, root: string): Finding[] {
         excerpt: excerptFor(text, offset),
       });
     }
+    findings.push(
+      ...auditJavaScriptNetworkTargets(
+        runtimeText,
+        text,
+        relativePath,
+        isBuiltArtifact,
+      ),
+    );
   }
 
   return findings;
@@ -354,7 +734,7 @@ export function main(argv = process.argv.slice(2)): number {
     return 2;
   }
 
-  const root = resolve(argv[0] ?? ".");
+  const root = resolve(process.env.INIT_CWD ?? process.cwd(), argv[0] ?? ".");
   if (!existsSync(root) || !statSync(root).isDirectory()) {
     console.error(`Skill directory not found: ${root}`);
     return 2;
@@ -381,6 +761,13 @@ export function main(argv = process.argv.slice(2)): number {
 }
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : "";
-if (invokedPath === fileURLToPath(import.meta.url)) {
+let invokedAsMain = invokedPath === fileURLToPath(import.meta.url);
+try {
+  invokedAsMain = Boolean(invokedPath)
+    && realpathSync(invokedPath) === realpathSync(fileURLToPath(import.meta.url));
+} catch {
+  // Keep the lexical fallback for missing/broken invocation paths.
+}
+if (invokedAsMain) {
   process.exitCode = main();
 }

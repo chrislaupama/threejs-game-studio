@@ -47,6 +47,10 @@ Prefer 2-5 high-value states:
   active camera distance.
 
 Avoid title-only screenshots unless title/menu work is the actual change.
+Capture the complete game shell (canvas plus HUD, menus, touch controls, safe
+areas, and player-facing error/loading UI), not the canvas alone. A separate
+canvas-only baseline can help isolate renderer changes, but it cannot prove the
+shipped composition or responsive UI.
 
 ## Determinism Requirements
 
@@ -54,13 +58,18 @@ Scaffold-generated games ship a working implementation of these hooks (`src/game
 
 ```ts
 window.__THREE_GAME_TEST_HOOKS__ = {
-  seed(value: number) {},
-  setState(name: string) {},
+  seed(value: number) { return true; },
+  setState(name: string) { return true; },
   setPausedForScreenshot(paused: boolean) {},
   setReducedMotion(enabled: boolean) {},
   hideDebugUi(hidden: boolean) {},
 };
 ```
+
+`seed()` and `setState()` return `true` only after accepting the request; an
+unknown state or rejected seed returns `false`. Inspectors and baseline setup
+must fail when that acknowledgement is missing instead of labeling a live or
+unchanged scene as the requested state.
 
 Before taking baselines:
 
@@ -71,6 +80,13 @@ Before taking baselines:
 - Wait for fonts, GLTFs, textures, audio decode blockers, and first frames.
 - Use fixed viewport/device profiles.
 - Mask known dynamic UI only if the masked area is not part of the acceptance criteria.
+
+Keep **normal motion** and **reduced motion** as separate contracts. The normal
+baseline must set `setReducedMotion(false)` and freeze the effect at a named,
+deterministic phase; the accessibility baseline sets it to `true` and proves
+the alternate presentation. Never make reduced motion the only active-play
+baseline, because that can hide missing trails, anticipation, shake fallbacks,
+or transition timing in the default experience.
 
 ## Playwright Pattern
 
@@ -85,9 +101,22 @@ npx playwright test tests/visual-regression.spec.ts
 
 Use thresholds carefully:
 
-- Prefer low `maxDiffPixelRatio` for stable UI/menu states.
-- Allow slightly higher thresholds for WebGL antialiasing/post-processing differences.
-- Do not set thresholds so high that real layout or asset failures pass.
+- Generate and compare baselines on a declared OS, browser build, viewport,
+  device scale factor, renderer/backend, font set, and GPU class. Keep separate
+  baselines when those inputs are intentionally different.
+- First run the unchanged capture repeatedly. Start at an exact comparison and
+  increase only enough to cover measured platform noise. Prefer a small
+  `maxDiffPixels` allowance for isolated raster noise over a large whole-image
+  ratio.
+- Calibrate the upper bound with a deliberate regression (for example a
+  missing HUD icon, shifted safe area, or hidden hero) and prove the comparison
+  fails. A threshold that accepts that mutation is invalid.
+- Do not apply one blanket threshold to every state. Stable UI/menu states
+  should be near exact; measured WebGL raster noise may justify a narrowly
+  documented allowance for the canvas region.
+- Never raise a threshold merely to make a flaky run green. Remove the source
+  of nondeterminism, split incompatible environments, or report the harness as
+  blocked.
 
 ## Asset Visibility Checks
 
@@ -106,55 +135,74 @@ Report:
 - Visual harness decision: added / extended / skipped.
 - States covered.
 - Determinism hooks used.
-- Desktop/mobile projects covered.
+- Desktop/mobile projects covered, including normal- and reduced-motion state.
 - Screenshot update command and compare command.
 - Baseline artifact paths.
-- Thresholds/masks and why they are safe.
+- Full-shell versus canvas-only coverage.
+- Repeated-run noise, thresholds/masks, and the deliberate regression used to
+  prove each threshold is strict enough.
 - Remaining flake risks.
 
 ## Richer Playwright Recipe
 
 ```ts
-import { test, expect, devices } from '@playwright/test';
+import { test, expect, devices, type Page } from '@playwright/test';
+
+async function stabilize(page: Page, reducedMotion: boolean): Promise<void> {
+  await page.goto('/');
+  await page.waitForFunction(() => window.__THREE_GAME_TEST_HOOKS__ !== undefined);
+  await page.evaluate(async (reduced) => {
+    await document.fonts.ready;
+    const hooks = window.__THREE_GAME_TEST_HOOKS__!;
+    if (hooks.seed(7) !== true) throw new Error('Seed was not accepted');
+    hooks.setReducedMotion(reduced);
+    hooks.hideDebugUi(true);
+    if (hooks.setState('active-play') !== true) throw new Error('State was not accepted');
+    hooks.setPausedForScreenshot(true);
+  }, reducedMotion);
+  // Let the fixed state, resize observers, and HUD styles reach the screen.
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+}
 
 test.describe('visual baselines', () => {
   test.use({ ...devices['Desktop Chrome'] });
 
-  test('active-play desktop', async ({ page }) => {
-    await page.goto('/');
-    await page.waitForFunction(() => window.__THREE_GAME_TEST_HOOKS__ !== undefined);
-    await page.evaluate(() => {
-      const hooks = window.__THREE_GAME_TEST_HOOKS__!;
-      hooks.seed(7);
-      hooks.setReducedMotion(true);
-      hooks.hideDebugUi(true);
-      hooks.setPausedForScreenshot(true);
-      hooks.setState('active-play');
+  for (const reducedMotion of [false, true]) {
+    test(`active-play desktop (${reducedMotion ? 'reduced' : 'normal'} motion)`, async ({ page }) => {
+      await stabilize(page, reducedMotion);
+      await expect(page).toHaveScreenshot(
+        `active-play-desktop-${reducedMotion ? 'reduced' : 'normal'}.png`,
+        {
+          // Start exact; relax only to a measured, mutation-tested allowance.
+          maxDiffPixels: 0,
+          animations: 'disabled',
+        },
+      );
     });
-    await expect(page.locator('canvas')).toHaveScreenshot('active-play-desktop.png', {
-      maxDiffPixelRatio: 0.02,
-      animations: 'disabled',
-    });
-  });
+  }
 });
 
 test.describe('mobile active-play', () => {
   test.use({ ...devices['iPhone 13'] });
 
-  test('active-play mobile', async ({ page }) => {
-    await page.goto('/');
-    await page.waitForFunction(() => window.__THREE_GAME_TEST_HOOKS__ !== undefined);
-    await page.evaluate(() => {
-      window.__THREE_GAME_TEST_HOOKS__!.seed(7);
-      window.__THREE_GAME_TEST_HOOKS__!.setReducedMotion(true);
-      window.__THREE_GAME_TEST_HOOKS__!.setState('active-play');
+  for (const reducedMotion of [false, true]) {
+    test(`active-play mobile (${reducedMotion ? 'reduced' : 'normal'} motion)`, async ({ page }) => {
+      await stabilize(page, reducedMotion);
+      await expect(page).toHaveScreenshot(
+        `active-play-mobile-${reducedMotion ? 'reduced' : 'normal'}.png`,
+        {
+          maxDiffPixels: 0,
+          animations: 'disabled',
+        },
+      );
     });
-    await expect(page.locator('canvas')).toHaveScreenshot('active-play-mobile.png', {
-      maxDiffPixelRatio: 0.03,
-    });
-  });
+  }
 });
 ```
 
 Store baselines under the Playwright snapshot directory. Re-record only after
-intentional art or layout changes; never raise thresholds to hide flakes.
+intentional art or layout changes; never raise thresholds to hide flakes. Run
+the compare at least twice from clean page loads before accepting a new
+baseline, and review the entire diff artifact rather than only the exit code.

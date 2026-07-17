@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './runtime-guard';
 
 // Copy this file to tests/bot-playtest.spec.ts to enable automated playtests.
 // The bot drives the game through scripted real input and measures whether the
@@ -32,25 +32,23 @@ const INPUT_SCRIPT: Array<{ keys: string[]; ms: number }> = [
   { keys: ['KeyA'], ms: 3400 },
 ];
 
-test('bot playtest: scripted input drives progress without errors', async ({ page }, testInfo) => {
+test('bot playtest: scripted input drives progress without errors', async ({
+  page,
+  runtimeGuard,
+}, testInfo) => {
   test.skip(
     testInfo.project.name !== 'desktop-chrome',
     'The bot uses keyboard input; mobile touch input is exercised by visual.spec.ts.',
   );
   test.setTimeout(90_000);
 
-  const pageErrors: string[] = [];
-  const consoleErrors: string[] = [];
-  page.on('pageerror', (error) => pageErrors.push(error.message));
-  page.on('console', (message) => {
-    if (message.type() === 'error') consoleErrors.push(message.text());
-  });
-
   await page.goto('/');
   await page.waitForFunction(() => (window.__THREE_GAME_DIAGNOSTICS__?.frame ?? 0) > 10);
   await page.evaluate(() => {
-    window.__THREE_GAME_TEST_HOOKS__?.seed(12345);
-    window.__THREE_GAME_TEST_HOOKS__?.setState('active-play');
+    const hooks = window.__THREE_GAME_TEST_HOOKS__;
+    if (!hooks || hooks.seed(12345) !== true || hooks.setState('active-play') !== true) {
+      throw new Error('Deterministic bot seed/state request was rejected');
+    }
   });
 
   const sample = (): Promise<BotSnapshot | null> =>
@@ -103,8 +101,7 @@ test('bot playtest: scripted input drives progress without errors', async ({ pag
     distanceTravelled: Number(distance.toFixed(2)),
     stepOfFirstScore,
     softlockWindows,
-    consoleErrors,
-    pageErrors,
+    runtimeEvidence: runtimeGuard,
   };
   await testInfo.attach('bot-playtest-report', {
     body: JSON.stringify(report, null, 2),
@@ -112,8 +109,6 @@ test('bot playtest: scripted input drives progress without errors', async ({ pag
   });
   console.log(`bot playtest: ${JSON.stringify(report)}`);
 
-  expect(pageErrors, 'page errors during bot play').toEqual([]);
-  expect(consoleErrors, 'console errors during bot play').toEqual([]);
   expect(report.framesAdvanced, 'game loop must keep running').toBeGreaterThan(100);
   expect(report.distanceTravelled, 'player must respond to scripted input').toBeGreaterThan(5);
   expect(report.softlockWindows, 'held input repeatedly produced no motion or progress').toBeLessThanOrEqual(2);

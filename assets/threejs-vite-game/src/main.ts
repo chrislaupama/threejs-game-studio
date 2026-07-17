@@ -14,7 +14,9 @@ try {
   game.start();
 } catch (error) {
   console.error('Three.js game startup failed', error);
+  document.querySelector('#app')?.classList.add('startup-failed');
   const message = document.createElement('section');
+  message.className = 'startup-error';
   message.setAttribute('role', 'alert');
   message.setAttribute('aria-live', 'assertive');
   message.textContent =

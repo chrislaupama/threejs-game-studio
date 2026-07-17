@@ -20,14 +20,22 @@ export class InterpolatedTransform {
     this.previousScale.copy(this.currentScale);
   }
 
-  endStep(): void {
+  /**
+   * Capture the authoritative pose after simulation. Pass `true` when the
+   * step teleported/reset the object so presentation does not sweep from the
+   * old pose to the new one.
+   */
+  endStep(discontinuity = false): void {
     this.currentPosition.copy(this.object.position);
     this.currentQuaternion.copy(this.object.quaternion);
     this.currentScale.copy(this.object.scale);
+    if (discontinuity) this.collapseHistoryToCurrent();
   }
 
   present(alpha: number): void {
-    const t = THREE.MathUtils.clamp(alpha, 0, 1);
+    const t = Number.isFinite(alpha)
+      ? THREE.MathUtils.clamp(alpha, 0, 1)
+      : 1;
     this.object.position.lerpVectors(
       this.previousPosition,
       this.currentPosition,
@@ -45,14 +53,19 @@ export class InterpolatedTransform {
     this.currentPosition.copy(this.object.position);
     this.currentQuaternion.copy(this.object.quaternion);
     this.currentScale.copy(this.object.scale);
+    this.collapseHistoryToCurrent();
+  }
+
+  /** Freeze the last authoritative pose without capturing an interpolated pose. */
+  hold(): void {
+    this.restoreCurrent();
+    this.collapseHistoryToCurrent();
+  }
+
+  private collapseHistoryToCurrent(): void {
     this.previousPosition.copy(this.currentPosition);
     this.previousQuaternion.copy(this.currentQuaternion);
     this.previousScale.copy(this.currentScale);
-  }
-
-  hold(): void {
-    this.restoreCurrent();
-    this.snap();
   }
 
   private restoreCurrent(): void {

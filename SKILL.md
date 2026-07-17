@@ -1,6 +1,6 @@
 ---
 name: threejs-game-studio
-description: "Plan, build, upgrade, debug, optimize, test, and release complete Three.js browser games from a novice idea to a production-quality result. Use for any Three.js game or interactive 3D request involving project setup, scene graphs, cameras, controls, gameplay loops, state, collision, physics, procedural or local assets, geometry, PBR materials, textures, lighting, shadows, loaders, animation, shaders, TSL, WebGLRenderer, WebGPURenderer, post-processing, VFX, UI, touch, accessibility, Web Audio, WebXR, performance, visual QA, bot playtests, or release. This is the sole coordinator: it selects and loads its own bundled references, chooses safe defaults, sequences implementation, and verifies the player-facing outcome without requiring any other skill. Default to a local-first Vite, TypeScript, and Three.js workflow and verify API choices against the installed Three.js revision and current official documentation."
+description: "Plan, build, teach, upgrade, debug, optimize, test, and release professional Three.js browser games. Use for Three.js game work involving project setup, scene graphs, cameras, input, gameplay, collision or physics, local and procedural assets, PBR rendering, WebGLRenderer, experimental WebGPURenderer/TSL, post-processing, VFX, UI, audio, WebXR, performance, accessibility, playtesting, or release QA. Coordinates a local-first Vite and TypeScript workflow, loads renderer- and task-specific references, and verifies version-sensitive APIs against the installed Three.js runtime and current official documentation."
 ---
 
 # Three.js Game Studio
@@ -10,10 +10,11 @@ playable loop, raise the whole active frame to a coherent quality bar, and prove
 the result in a real browser. Do not stop at a rendered scene when the request is
 for a game.
 
-## Act As The Sole Coordinator
+## Coordinate The Complete Game Outcome
 
 Use this file as the control plane and the bundled `references/` as
-progressive-disclosure manuals. Never ask the user to choose manuals or phases.
+progressive-disclosure manuals. Select the relevant manuals and phases from the
+request and project evidence; do not make the user navigate the skill package.
 
 ### Common Failure Modes
 
@@ -27,16 +28,22 @@ Reject these outcomes before claiming progress or quality:
 
 ### Coordinator Steps
 
-1. Classify delivery as tutorial or direct, then classify scope as focused,
-   broad-production, or release. Tutorial delivery never reduces the required
-   scope.
+1. Classify delivery as tutorial or direct. Then choose the base work shape:
+   focused or broad-production. Add the premium quality overlay for a
+   polished/premium/showcase claim, and add the release evidence gate when the
+   result is being shipped. These compose; tutorial delivery never reduces the
+   required scope.
 2. Inspect the project before prescribing architecture or dependencies.
-3. Run the version and renderer decision gate.
+3. Run the version and renderer decision gate. An explicit user renderer
+   requirement takes precedence unless compatibility evidence proves it
+   infeasible. Otherwise treat discovery as a provisional candidate, then
+   finalize it after the relevant compatibility reference and, for a changed
+   family, a minimal compile/browser spike.
 4. Load `references/load-budgets.md`, then only the minimum refs for this scope
    (plus triggered refs). Do not preload premium/WebGPU/shader/release manuals
    before the playable loop is proven.
-5. Keep design, decision, content, performance, and verification ledgers only
-   for broad, premium, or release work. Focused work: reproduce → fix →
+5. Keep design, decision, content, performance, and verification ledgers for
+   broad work and any active premium or release gate. Focused work: reproduce → fix →
    proportionate QA with owning refs + `qa-release.md` — no full ledger ceremony.
 6. Implement the smallest complete playable loop before expensive polish.
 7. Integrate all phase output through one game state, one update order, and one
@@ -45,8 +52,8 @@ Reject these outcomes before claiming progress or quality:
 
 When parallel workers are available, delegate independent research,
 implementation, art-system, and QA tasks with the exact relevant references.
-Keep integration and final verification with the coordinator. No additional
-skill package is required or assumed.
+Keep integration and final verification with the coordinator. Use another
+specialized capability only when the task genuinely needs it.
 
 ## Official Documentation And Version Gate
 
@@ -60,27 +67,39 @@ npm ls three
 node -e "import('three').then((THREE) => console.log(THREE.REVISION))"
 ```
 
-For a greenfield project, check the current stable package when network access
-is available:
+For a greenfield project, check the current stable package through the bounded
+probe after dependencies exist:
 
 ```bash
-npm view three version
+npm --prefix <this-skill-dir> run probe:three -- <project>
 ```
 
-This skill is universal for **Three.js r185 and onwards**. Prefer current npm
-latest for greenfield installs (`npm install three` / `three@latest`), with a
-minimum floor of r185 (Timer-in-core, `HDRLoader`, soft `PCFShadowMap`, and
-`RenderPipeline` naming). Never copy a live-doc API into an older installed
-project without checking the official migration guide and version-matching
-source/examples.
+The probe limits npm lookup time to 20 seconds. If npm is unavailable, record
+the offline result, use the reproducible verified lockfile, and do not claim a
+newer stable target until the networked check can be rerun.
+
+Recipes in this package use **Three.js r185 as their verified baseline** (last
+checked with npm `three@0.185.1`). The generated scaffold starts from that
+reproducible lockfile; compare it with current stable and upgrade intentionally
+when they differ. For an existing project, preserve its installed revision
+unless an upgrade is in scope. Any revision other than the verified baseline
+requires the matching
+official migration notes, source/examples, build/typecheck, and browser proof;
+do not assume “r185+” means future APIs are unchanged.
+
+For a maintenance refresh, run `npm run audit:official-links`; keep this
+networked link check separate from deterministic offline verification.
 
 Use this authority order:
 
-1. The project's installed `three` revision and its exported types.
+1. The project's installed `three` runtime revision and source.
 2. Version-matching official Three.js API docs, manual, examples, and source.
 3. Official release notes and migration guide.
-4. The bundled references and scaffold in this package.
-5. Third-party examples only as inspiration; re-verify every API against 1-3.
+4. The separately installed, community-maintained `@types/three` declarations
+   as compile-contract evidence; align them with the runtime revision and
+   document mismatches.
+5. The bundled references and scaffold in this package.
+6. Third-party examples only as inspiration; re-verify every API against 1-4.
 
 Preserve an existing project's version unless the user asked for an upgrade or
 the requested feature requires one. Never perform a wide revision jump as a
@@ -117,6 +136,14 @@ release.
 
 ## Choose Delivery And Scope
 
+Scope labels are additive where they describe different responsibilities. A
+"premium game ready to release" is **broad-production workflow + premium
+quality overlay + release evidence gate**. Premium is not a replacement for
+building the complete loop, and release is not a replacement for either the
+implementation or quality work. An audit-only release task may start at the
+release gate only when the project already contains the promised completed
+scope; missing product work reactivates the owning focused or broad workflow.
+
 ### Tutorial delivery
 
 Use when the user wants to learn. Build a working result while explaining the
@@ -138,29 +165,55 @@ ledgers.
 ### Broad-production scope
 
 Use for a new game, major upgrade, "complete", "polished", "premium",
-"showcase", or "less basic" request. Read `references/load-budgets.md` then
+"showcase", or "less basic" request. This is the base workflow for premium
+work, not the premium gate itself. Read `references/load-budgets.md` then
 `references/workflow.md`, execute every applicable phase, and keep the ledgers.
 A broad request is not complete after a vertical slice unless the user
 explicitly chose a slice.
 
-### Release scope
+A revision-only migration that preserves the renderer family, shader language,
+post stack, and gameplay architecture may use the focused legacy-upgrade route.
+A WebGL↔WebGPU renderer-family port, GLSL↔TSL rewrite, or post-processing
+architecture port is broad-production work even when the request calls it an
+"upgrade".
+
+### Premium quality overlay
+
+Activate this after a playable browser-proven loop exists whenever the request
+claims polished, premium, showcase, or an equivalent quality bar. Add visual
+architecture, rendering/VFX, technical-art budgets, active-state captures, and
+the measured quality scorecard without abandoning the broad-production ledger.
+
+A bounded "premium-feeling" or "premium-oriented" starter is an explicitly
+limited broad scope with premium direction, not premium certification. Apply
+the overlay to its delivered active states, report every unrun gate, and call it
+premium-oriented until the complete scorecard passes; do not silently expand a
+starter into release content or weaken an explicit request for a premium game.
+
+### Release evidence gate
 
 Use for release-ready, deployment-prep, or final QA. Exercise the production
 build and preview, complete browser/mobile/accessibility/performance evidence,
 make the visual-regression and bot-playtest decisions, and report every unrun
-check.
+check. Enter after feature freeze; do not use release manuals as an up-front
+substitute for the playable and premium work they are meant to verify.
 
 ## Novice-Safe Defaults
 
 Choose these unless project evidence or the request demands otherwise:
 
 - Vite + TypeScript + npm + `three` package imports.
+- An explicit renderer choice in the request or an established project
+  contract takes precedence over the generic defaults below. Preserve it
+  unless it is unavailable or incompatible with a required feature; explain
+  that conflict before proposing a renderer change.
 - `WebGLRenderer` for the widest mature production path and straightforward
   tutorials.
-- For a graphics-heavy or compute-heavy 3D site/game, explicitly offer
-  `WebGPURenderer` as the recommended modern option when the target browsers,
-  material/post stack, and measured workload fit it. Explain its experimental
-  status and WebGL 2 fallback before the user commits to the renderer family.
+- For a graphics-heavy or compute-heavy 3D site/game, offer the experimental
+  `WebGPURenderer` as a first-class candidate when the target browsers,
+  material/post stack, and measured workload fit it. Explain its status and
+  WebGL 2 fallback, then benchmark against the mature WebGL path before the
+  user commits to the renderer family.
 - `PerspectiveCamera`, r185 `Timer`, and `renderer.setAnimationLoop()`.
 - glTF 2.0 (`.glb`) through `GLTFLoader` for authored 3D assets.
 - `MeshStandardMaterial` plus an intentional environment and light rig.
@@ -175,7 +228,10 @@ Choose these unless project evidence or the request demands otherwise:
 Explain deviations. Treat WebGPU as a first-class candidate for demanding 3D,
 not a guaranteed speed switch: validate the actual WebGPU backend, the
 WebGPURenderer's WebGL 2 fallback, and a preserved `WebGLRenderer` path only
-when each is claimed. Use compressed-asset transcoders, custom shaders, XR, or
+when each is claimed. Unless the user supplied a renderer requirement,
+discovery records only a provisional candidate; finalize after reading the
+relevant renderer/shader compatibility reference and proving a minimal path in
+the target browser. Use compressed-asset transcoders, custom shaders, XR, or
 advanced post-processing as deliberate upgrades.
 
 ## Reference Router
@@ -186,10 +242,20 @@ Use this before opening the full table. Then load only the budgeted refs.
 
 - Blank or broken canvas → `references/debugging-performance.md`
 - Controls or feel bad → `references/game-feel.md` + `references/interaction.md`
-- Looks basic / premium ask → `references/visual-architecture.md` + scorecard
+- Looks basic / premium ask → `references/visual-architecture.md` +
+  `references/technical-art.md` + scorecard
 - New game → `references/load-budgets.md` first-playable set + genre section
-- Upgrade old Three.js / CDN / global `THREE` → `references/upgrade-existing.md`
+- Third-person action / chase, shoulder, free, or lock-on camera →
+  `references/game-design.md` + **First-Person Or Third-Person Action** in
+  `references/genre-playbooks.md` + **Third-Person Action Rig Contract** in
+  `references/interaction.md`
+- Revision-only old Three.js / CDN / global `THREE` migration →
+  `references/upgrade-existing.md`; renderer-family/shader-architecture ports
+  also activate broad-production workflow
 - Import or asset issues → `references/local-assets.md` + `npm run audit:assets`
+- Perception, patrol, pursuit, pathfinding, or crowds → `references/ai-navigation.md`
+- Versioned saves, world streaming, workers, or local diagnostics →
+  `references/production-runtime.md`
 - Multiplayer / cloud / netcode ask → `references/networking-boundary.md` (stop)
 
 ### Detailed index
@@ -200,110 +266,82 @@ loading this entire table.
 
 | Need | Required reference |
 | --- | --- |
-| Minimum refs per scope; hard defer rules | `references/load-budgets.md` |
-| Legacy CDN / pre-r185 migration order | `references/upgrade-existing.md` |
-| Multiplayer / cloud boundary (approval required) | `references/networking-boundary.md` |
-| Modern r185+ APIs, official sources, migration traps | `references/official-docs.md` |
-| One-page r185+ cheat sheet (imports, loop, color, shadows, loaders, post, disposal) | `references/quickref.md` |
-| Beginner mental model, scene/camera/renderer/timer/resize/lifecycle | `references/fundamentals.md` |
-| Full production phases, ledgers, exit evidence | `references/workflow.md` |
-| Player promise, core loop, level/encounter, progression, difficulty | `references/game-design.md` |
-| Runner, racer, collect-and-avoid arena, shooter/action, platformer, survival, RPG, RTS, rhythm, tower defense, cue sport, golf, boss, puzzle | `references/genre-playbooks.md` |
-| Module ownership, state, update order, input, camera, entities | `references/gameplay-architecture.md` |
-| Reusable cross-system implementation patterns | `references/implementation-recipes.md` |
-| Coordinates, axes, spaces, authoritative transforms, world queries | `references/spatial-contracts.md` |
-| Geometry, BufferGeometry, procedural meshes, merging, instancing, batching | `references/geometry.md` |
-| PBR materials, textures, UVs, color spaces, transparency, environment maps | `references/materials-textures.md` |
-| Light selection, shadows, baking/fakes, environment and readability | `references/lighting-shadows.md` |
-| Linear workflow, ACES vs AgX vs Neutral tone mapping, OutputPass / RenderOutputNode | `references/tone-mapping-color.md` |
-| LoadingManager, GLTF/DRACO/KTX2/Meshopt, animation mixers and state machines | `references/loaders-animation.md` |
-| Local model, texture, font, audio intake, provenance, optimization, disposal | `references/local-assets.md` |
-| Collision model, fixed step, sweeps, triggers, authored response | `references/physics.md` |
-| Responsiveness, hit feedback, shake, hitstop, camera kick, tuning | `references/game-feel.md` |
-| Procedural hero/enemy/reward/world construction | `references/procedural-modeling.md` |
-| Art direction, material roles, world layers, VFX ownership | `references/visual-architecture.md` |
-| Hit sparks, trails, muzzle/impact flashes, pooled sprites/points, GPU particles | `references/vfx.md` |
-| CSS2D/CSS3D overlays, Line2, billboards, TransformControls handoff | `references/overlays.md` |
-| Renderer setup, composition, color, fog, post, renderer diagnostics | `references/rendering.md` |
-| Heavy-3D WebGPU decision, boot, fallback, TSL, compute, clustered lights, profiling | `references/webgpu.md` |
-| WebGL GLSL/onBeforeCompile and WebGPU TSL/RenderPipeline recipes | `references/shaders.md` |
-| Draw-call/triangle/texture budgets, LOD, pooling, culling, disposal | `references/technical-art.md` |
-| Cameras, raycasting, selection, pointer lock, gamepad, manipulation | `references/interaction.md` |
-| Third-person follow/orbit camera with collision and handoff | `references/implementation-recipes.md` and `references/interaction.md` |
-| HUD, menus, touch, responsive fit, accessibility, state wiring | `references/ui.md` |
-| Music/SFX/UI buses, spatial audio, gesture unlock, pause/mute/disposal | `references/audio.md` |
-| WebXR renderer, controllers/hands, locomotion, comfort, performance, QA | `references/webxr.md` |
-| Blank canvas, runtime defects, asset errors, profiling and optimization | `references/debugging-performance.md` |
-| Deterministic states and screenshot comparisons | `references/visual-regression.md` |
-| Scripted input, completion paths, softlocks, difficulty signals | `references/bot-playtesting.md` |
-| Browser matrix, production preview, static release and evidence | `references/qa-release.md` |
-| Premium/showcase calibration | `references/quality-scorecard.md`, `references/quality-gates.md`, and every image in `assets/scorecard-anchors/` |
+| Minimum refs per scope; hard defer rules | [load-budgets.md](references/load-budgets.md) |
+| Legacy CDN / old-revision migration order | [upgrade-existing.md](references/upgrade-existing.md) |
+| Multiplayer / cloud boundary (approval required) | [networking-boundary.md](references/networking-boundary.md) |
+| Version-sensitive APIs, official sources, migration traps | [official-docs.md](references/official-docs.md) |
+| One-page verified-baseline cheat sheet | [quickref.md](references/quickref.md) |
+| Scene/camera/renderer/timer/resize/lifecycle fundamentals | [fundamentals.md](references/fundamentals.md) |
+| Full production phases, ledgers, exit evidence | [workflow.md](references/workflow.md) |
+| Player promise, core loop, level/encounter, progression, difficulty | [game-design.md](references/game-design.md) |
+| Genre completion contracts | [genre-playbooks.md](references/genre-playbooks.md) |
+| Module ownership, state, update order, input, camera, entities | [gameplay-architecture.md](references/gameplay-architecture.md) |
+| Perception, steering, pathfinding, nav data, crowd scheduling | [ai-navigation.md](references/ai-navigation.md) |
+| Reusable cross-system implementation patterns | [implementation-recipes.md](references/implementation-recipes.md) |
+| Coordinates, axes, spaces, authoritative transforms, world queries | [spatial-contracts.md](references/spatial-contracts.md) |
+| Geometry, procedural meshes, merging, instancing, batching | [geometry.md](references/geometry.md) |
+| PBR materials, textures, UVs, color spaces, transparency, environments | [materials-textures.md](references/materials-textures.md) |
+| Light selection, shadows, baking/fakes, environment and readability | [lighting-shadows.md](references/lighting-shadows.md) |
+| Linear workflow, tone mapping, output transforms | [tone-mapping-color.md](references/tone-mapping-color.md) |
+| Loading, compressed assets, animation mixers and state machines | [loaders-animation.md](references/loaders-animation.md) |
+| Local asset intake, provenance, optimization, and ownership | [local-assets.md](references/local-assets.md) |
+| Collision model, fixed step, sweeps, triggers, authored response | [physics.md](references/physics.md) |
+| Responsiveness, hit feedback, shake, hitstop, camera kick, tuning | [game-feel.md](references/game-feel.md) |
+| Procedural hero/enemy/reward/world construction | [procedural-modeling.md](references/procedural-modeling.md) |
+| Art direction, material roles, world layers, VFX ownership | [visual-architecture.md](references/visual-architecture.md) |
+| Hit sparks, trails, flashes, pooled sprites/points, GPU particles | [vfx.md](references/vfx.md) |
+| CSS renderers, Line2, billboards, TransformControls handoff | [overlays.md](references/overlays.md) |
+| Renderer setup, composition, color, fog, post, diagnostics | [rendering.md](references/rendering.md) |
+| Experimental WebGPU decision, boot, fallback, TSL, compute, profiling | [webgpu.md](references/webgpu.md) |
+| WebGL GLSL and WebGPU TSL/RenderPipeline recipes | [shaders.md](references/shaders.md) |
+| Draw-call/triangle/texture budgets, LOD, pooling, culling, disposal | [technical-art.md](references/technical-art.md) |
+| Versioned saves, chunk streaming, workers, local diagnostics | [production-runtime.md](references/production-runtime.md) |
+| Cameras, raycasting, selection, pointer lock, gamepad, manipulation | [interaction.md](references/interaction.md) |
+| HUD, menus, touch, responsive fit, accessibility, state wiring | [ui.md](references/ui.md) |
+| Music/SFX/UI buses, spatial audio, unlock, pause/mute/disposal | [audio.md](references/audio.md) |
+| WebXR renderer, controllers/hands, comfort, performance, QA | [webxr.md](references/webxr.md) |
+| Blank canvas, runtime defects, asset errors, profiling | [debugging-performance.md](references/debugging-performance.md) |
+| Deterministic states and screenshot comparisons | [visual-regression.md](references/visual-regression.md) |
+| Scripted input, completion paths, softlocks, difficulty signals | [bot-playtesting.md](references/bot-playtesting.md) |
+| Browser matrix, production preview, release evidence | [qa-release.md](references/qa-release.md) |
+| Premium/showcase calibration and measured render budgets | [quality-scorecard.md](references/quality-scorecard.md), [quality-gates.md](references/quality-gates.md), [technical-art.md](references/technical-art.md), and `assets/scorecard-anchors/` |
 
 ## Broad Production Workflow
 
-Use `references/workflow.md` for the full gates. The coordinator must preserve
-this dependency order.
+Use `references/workflow.md` for each phase's routes, ledgers, exit evidence,
+and full gates. Preserve this dependency order:
 
-### 1. Discover and define complete
-
-Inspect files, scripts, dependencies, installed Three.js revision, renderer,
-loop, input, camera, state, assets, tests, target devices, and release target.
-Write the design brief, core-loop sentence, first level/encounter plan, session
-length, content counts, victory/ending condition, non-goals, and explicit
-definition of complete.
-
-### 2. Choose technical contracts
-
-Classify the render workload and offer WebGL or WebGPU when heavy 3D makes the
-choice material. Then declare the renderer family and actual fallback contract;
-units and axes; camera style; simulation model;
-fixed/variable timing; input intents; state machine; asset layout; color-space
-policy; quality tiers; performance budgets; loading/error behavior; save scope;
-and disposal ownership. Resolve these before features create competing owners.
-
-### 3. Build the smallest complete playable loop
-
-Make real input change canonical game state. Include an objective, pressure,
-reward/progression, readable consequence, and fast retry or next-run flow. Add
-minimal HUD/audio/VFX and diagnostics. Verify through actual input before deep
-art work.
-
-### 4. Establish content and art direction
-
-Fill the local content plan. Build or integrate a readable hero, distinct
-threats, desirable rewards, modular world kit, material roles, background
-layers, and collision proxies. Normalize imported assets at one boundary.
-Replace placeholders across the active frame, not only the hero object.
-
-### 5. Build visual systems in dependency order
-
-Improve composition and silhouettes, spatial depth, authored geometry,
-materials, environment/lighting, shadows, motion/VFX, then post-processing.
-Always compare post enabled/disabled. Do not use bloom, darkness, fog, or
-particles to conceal weak geometry and art direction.
-
-### 6. Add feel, UI, audio, and accessibility
-
-Couple response layers to semantic game events. Implement gameplay, pause,
-settings, loading/error, fail/retry, win/milestone, and relevant touch states.
-Protect safe areas, keyboard focus, reduced motion, color-independent cues,
-audio mute, and gesture unlock.
-
-### 7. Profile and scale
-
-Measure the worst active state. Optimize the measured owner: allocations,
-draw calls, shader/material count, overdraw, shadows, post, texture memory,
-geometry, physics, or DOM. Use sharing, pooling, `InstancedMesh`, `BatchedMesh`,
-LOD hysteresis, culling, compressed local assets, and adaptive quality only
-when they preserve readability and the intended feeling.
-
-### 8. Verify and release
-
-Run build/typecheck, focused tests, a local browser, console/page error checks,
-nonblank-canvas inspection, real controls, objective progression, failure and
-retry, resize, production preview, and mobile checks when in scope. Decide and
-record visual-regression and bot-playtest coverage. For premium claims, fill
-the scorecard with measured evidence and conduct a fresh-eyes pass.
+1. **Discover and define complete.** Inspect the project, installed Three.js
+   revision, renderer, loop, input, camera, state, assets, tests, devices, and
+   release target. Record the design brief, core loop, content/session targets,
+   ending, non-goals, and explicit definition of complete.
+2. **Choose technical contracts.** Honor an explicit renderer requirement unless
+   infeasible. Otherwise treat discovery as provisional, read the relevant
+   compatibility reference, and compile/browser-spike a changed family before
+   finalizing renderer/fallback; spatial, camera, simulation/timing, input,
+   state, asset, color, quality, performance, loading/save, and disposal
+   contracts.
+3. **Build the smallest complete playable loop.** Make real input change
+   canonical state; include objective, pressure, reward/progression, readable
+   consequence, retry/next run, minimal HUD/audio/VFX, diagnostics, and browser
+   input proof before deep polish.
+4. **Establish content and art direction.** Plan and integrate a readable hero,
+   threats, rewards, modular world kit, material roles, background layers, and
+   collision proxies. Normalize imports once and replace placeholders across the
+   active frame.
+5. **Build visual systems in order.** Improve composition/silhouettes, depth,
+   geometry, materials, environment/lighting, shadows, motion/VFX, then post.
+   Compare post on/off; do not conceal weak form or art direction with effects.
+6. **Add feel, UI, audio, and accessibility.** Drive response layers from
+   semantic events; cover gameplay, pause, settings, loading/error, fail/retry,
+   win/milestone, touch, focus, safe areas, reduced motion, color-independent
+   cues, mute, and gesture unlock.
+7. **Profile and scale.** Measure the worst active state and optimize its owner
+   without sacrificing readability, fairness, feel, or lifecycle correctness.
+8. **Verify and release.** Run build/typecheck, focused tests, production preview,
+   browser/error/canvas/control/progression/fail-retry/resize/mobile checks, and
+   record visual-regression and bot-playtest decisions. Premium claims also need
+   measured scorecard evidence and a fresh-eyes pass.
 
 ## Architecture Invariants
 
@@ -311,8 +349,11 @@ the scorecard with measured evidence and conduct a fresh-eyes pass.
 - Keep one owner for the renderer, active camera, animation loop, timer,
   simulation clock, game state, resize, loading manager, audio context, asset
   cache, and teardown.
-- Use `input -> fixed simulation -> game rules -> animation/VFX -> camera ->
-  UI/audio bridge -> render` as the default update order.
+- Use `sample devices -> player/AI intents -> fixed movement +
+  collision/physics -> game rules/events -> animation/VFX -> camera ->
+  UI/audio bridge -> render` as the default update order. Scheduled AI sensing
+  and decisions must publish intent before the step that resolves movement and
+  contact.
 - Convert device events into intents. Never make simulation depend directly on
   DOM event timing.
 - Route gameplay randomness through a seeded generator. Keep screenshot and bot
@@ -325,12 +366,14 @@ the scorecard with measured evidence and conduct a fresh-eyes pass.
   with a teardown path.
 - Keep debug/tuning/test hooks explicit and gated from production presentation.
 
-## Modern API Guardrails (r185+)
+## Verified-Baseline API Guardrails
 
 Prefer current names; reject legacy aliases:
 
 - Use `THREE.Timer`; do not introduce deprecated `THREE.Clock`.
-- Use `renderer.setAnimationLoop()` for WebGL, WebGPU, and XR compatibility.
+- Prefer `renderer.setAnimationLoop()` as the renderer-owned loop. WebXR needs
+  it; a manual `requestAnimationFrame()` WebGPU loop must first `await
+  renderer.init()` and deliberately own session compatibility.
 - Import official addons from `three/addons/...`.
 - Use `renderer.outputColorSpace`, `texture.colorSpace`,
   `THREE.SRGBColorSpace`, and `THREE.LinearSRGBColorSpace`.
@@ -338,14 +381,18 @@ Prefer current names; reject legacy aliases:
   `NeutralToneMapping`) for lit PBR; do not leave games on default
   `NoToneMapping` without a reason. See `references/tone-mapping-color.md`.
 - Prefer opaque canvases (`alpha: false`) plus opaque `Scene.background` /
-  `setClearColor` unless HTML compositing is required.
+  `setClearColor` unless HTML compositing or AR camera passthrough is required.
 - Use `HDRLoader`, not the deprecated `RGBELoader` alias.
-- Use `THREE.PCFShadowMap`, not deprecated `PCFSoftShadowMap`.
+- On the verified r185 WebGL path, use soft `THREE.PCFShadowMap`, not deprecated
+  `PCFSoftShadowMap`. On WebGPU, verify the installed revision: r185 still
+  exposes `PCFSoftShadowMap`, while the next migration removes it.
 - Use `BufferGeometryUtils.mergeGeometries()`, not
   `mergeBufferGeometries()`.
 - Use `PointerLockControls.object`, not `getObject()`.
 - Treat `Raycaster.firstHitOnly` as third-party behavior, never core Three.js.
-- Use WebGL `EffectComposer` with `OutputPass` last only on the WebGL path.
+- Use WebGL `EffectComposer` only on the WebGL path. Put linear/HDR effects
+  before `OutputPass`; put display-referred passes that require sRGB input,
+  such as FXAA, after it.
 - Use WebGPU node materials/TSL and `THREE.RenderPipeline`; never combine
   WebGPU with `ShaderMaterial`, `RawShaderMaterial`, `onBeforeCompile()`, or
   `EffectComposer`.
@@ -362,7 +409,8 @@ Prefer current names; reject legacy aliases:
 
 ## Greenfield Scaffold
 
-Create the packaged Vite + TypeScript + Three.js (r185+) game. Default genre is
+Create the packaged Vite + TypeScript + Three.js game from the verified r185
+baseline, then reconcile it with the current stable package. Default genre is
 the collect-and-avoid arena. Pass `--genre runner|shooter|platformer` to apply a
 genre overlay on the shared ownership seams.
 
@@ -371,17 +419,19 @@ npm --prefix <this-skill-dir> install
 npm --prefix <this-skill-dir> run create:game -- ./my-game
 npm --prefix <this-skill-dir> run create:game -- ./my-runner --genre runner
 cd ./my-game
-npm install
+npm ci
 npm run setup:browsers
 npm run dev
 ```
 
 The generator refuses to overlay a non-empty directory. It copies the complete
 `src/`, `public/`, and `tests/` starter plus `docs/game-report.md`,
-`docs/content-provenance.md`, and local audit/canvas-inspection scripts; it does
-not copy `node_modules`, builds, test results, or caches. Generated commands are
-`npm run dev`, `build`, `preview`, `setup:browsers`, `test`, `verify:visual`,
-`inspect:canvas`, and `audit:local`.
+`docs/content-provenance.md`, and the maintained revision, API, asset, report,
+local-runtime, canvas, and ship-check scripts; it does not copy `node_modules`,
+builds, test results, or caches. Generated commands include `dev`, `build`,
+`preview`, `test`, `verify`, `verify:visual`, `verify:three`, `inspect:canvas`,
+`audit:local`, `audit:apis`, `audit:assets`, `audit:report`, `probe:three`, and
+`ship-check`.
 
 Use it as a production teaching baseline, not a universal game design. Replace
 the arena, objective, entities, tuning, and art direction while preserving
@@ -404,9 +454,13 @@ For release or broad completion claims, prefer the unified ship check:
 npm --prefix <this-skill-dir> run ship-check -- /path/to/game
 ```
 
-Use `--skip-canvas` only when the local preview cannot run; report that skip.
-Pass `--premium` / `--polished` through to the report auditor when those claims
-are made.
+The command builds and tests first, owns a temporary diagnostics-enabled
+preview for deterministic evidence, then rebuilds and separately previews the
+actual clean `dist` for a non-instrumented canvas/startup smoke. It always
+terminates both previews; do not pre-start a server on its port.
+Use `--skip-canvas` only when preview cannot run. That mode exits incomplete
+rather than passing, so report the missing evidence. Pass `--premium` /
+`--polished` through to the report auditor when those claims are made.
 
 Broad work additionally requires the design contract, phase ledger, content
 plan, controls, objective/fail-retry evidence, renderer revision/backend,

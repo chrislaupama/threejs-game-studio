@@ -2,7 +2,11 @@ import * as THREE from 'three';
 
 const FIXED_STEP_SECONDS = 1 / 60;
 const MAX_FRAME_DELTA_SECONDS = 0.1;
-const MAX_STEPS_PER_FRAME = 5;
+// The cap covers the complete accepted frame delta. Coupling these constants
+// prevents a slow frame from silently discarding valid simulation time.
+const MAX_STEPS_PER_FRAME = Math.ceil(
+  MAX_FRAME_DELTA_SECONDS / FIXED_STEP_SECONDS,
+);
 
 export class Loop {
   private readonly timer = new THREE.Timer();
@@ -61,12 +65,6 @@ export class Loop {
       }
     }
 
-    if (
-      steps === MAX_STEPS_PER_FRAME &&
-      this.accumulator >= FIXED_STEP_SECONDS
-    ) {
-      this.accumulator = 0;
-    }
     this.render(
       THREE.MathUtils.clamp(this.accumulator / FIXED_STEP_SECONDS, 0, 1),
     );

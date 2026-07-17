@@ -1,6 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const browserChannel = process.env.PLAYWRIGHT_CHANNEL as 'chrome' | undefined;
+const port = Number(process.env.THREE_GAME_PORT ?? '5188');
+if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  throw new Error('THREE_GAME_PORT must be an integer from 1 through 65535.');
+}
+const loopbackUrl = 'http://127.0.0.1' + ':' + port;
 
 export default defineConfig({
   testDir: './tests',
@@ -8,19 +13,24 @@ export default defineConfig({
   // rasterizer, and the frame-time collapse makes game time drift from wall
   // time, flaking timed gameplay phases and screenshot baselines.
   workers: 1,
+  forbidOnly: Boolean(process.env.CI),
+  retries: process.env.CI ? 1 : 0,
   timeout: 30_000,
   expect: {
-    timeout: 5_000,
+    timeout: 8_000,
   },
   use: {
-    baseURL: 'http://127.0.0.1:5188',
+    baseURL: loopbackUrl,
     serviceWorkers: 'block',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
   webServer: {
-    command: 'npm run dev',
-    url: 'http://127.0.0.1:5188',
+    command: 'npm run build:e2e && npm run preview:e2e',
+    env: {
+      VITE_ENABLE_GAME_DIAGNOSTICS: 'true',
+    },
+    url: loopbackUrl,
     reuseExistingServer: false,
     timeout: 20_000,
   },

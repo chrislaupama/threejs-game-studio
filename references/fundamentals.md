@@ -1,4 +1,4 @@
-# Three.js Game Fundamentals
+# Three.js Game Fundamentals (r185 Verified Baseline)
 
 ## Contents
 
@@ -21,15 +21,19 @@ Asset-loading examples use the project-owned `publicAssetUrl()` helper from
 
 ## Local Project Baseline
 
-Install current Three.js (r185+ floor). Prefer npm latest for greenfield:
+For the verified baseline, install matching r185 runtime and community types.
+For a new project, first check current stable and resolve both packages together:
 
 ```bash
 npm install three
 npm install --save-dev @types/three vite typescript
+npm ls three @types/three
 ```
 
-Confirm the installed revision is at least 185 (`THREE.REVISION` / `npm ls three`)
-before copying modern APIs from this skill.
+The `three` package does not bundle TypeScript declarations. Confirm
+`THREE.REVISION`, the runtime package, and `@types/three` intentionally align;
+for any revision other than the verified r185 baseline, reconcile official
+migration notes and matching source before copying APIs from this skill.
 
 Use one canvas owned by the renderer:
 
@@ -106,20 +110,36 @@ actor.rotation.y = Math.PI * 0.25;
 Use these ownership rules:
 
 - Keep one root per actor, pickup, projectile, or world chunk.
-- Put model-axis, scale, and pivot correction under an asset wrapper. Move the
-  wrapper's parent for gameplay.
+- Put model-axis, scale, and multi-part pivot correction under an asset wrapper.
+  Move the wrapper's parent for gameplay. For a simple single-node rotation or
+  scale pivot, current `Object3D.pivot` is available; do not use it to blur asset
+  normalization and gameplay ownership.
 - Keep collision shapes and gameplay coordinates authoritative; copy or
   interpolate them into the visual root.
 - Avoid mutating a child's world transform as though it were local.
-- Use `Object3D.attach(child)` when reparenting must preserve world transform.
-- Call `updateMatrixWorld(true)` before querying world transforms outside the
-  normal render update.
+- Use `Object3D.attach(child)` when reparenting must preserve world transform,
+  except across non-uniformly scaled nodes—the official API does not support
+  that graph shape.
+- World-query methods such as `getWorldPosition()` update the required parent
+  chain themselves. Do not force-update an actor's entire descendant tree for
+  one query.
 - Reuse target vectors in hot paths to avoid allocation.
 
 ```ts
 const worldPosition = new THREE.Vector3();
-actor.updateMatrixWorld(true);
 actor.getWorldPosition(worldPosition);
+```
+
+When batching many world queries, update a deliberate common root once rather
+than every child. `updateWorldMatrix(updateParents, updateChildren)` chooses the
+directions to traverse; `updateMatrixWorld(force)` can force all descendants.
+For a manual-matrix object, mark direct matrix edits explicitly:
+
+```ts
+actor.matrixAutoUpdate = false;
+actor.matrix.copy(authoritativeMatrix);
+actor.matrixWorldNeedsUpdate = true; // required before updateWorldMatrix in r185
+actor.updateWorldMatrix(true, false);
 ```
 
 Read the official [scene-graph guide](https://threejs.org/manual/en/scenegraph.html)
@@ -141,6 +161,13 @@ camera clips, movement speeds, and model sizes understandable. For WebXR, use
 Avoid enormous coordinate magnitudes. Partition or recenter large worlds, keep
 the camera near the active simulation region, and keep the near/far range as
 tight as the design permits.
+
+If a WebGL game still needs an extreme depth range, evaluate the constructor
+option `reversedDepthBuffer: true` before `logarithmicDepthBuffer`. The official
+renderer describes reversed depth as faster and more accurate, but it requires
+`EXT_clip_control`; check `renderer.capabilities.reversedDepthBuffer`, retain a
+fallback, and rebuild the renderer when changing the option. It does not replace
+tight clip planes or world recentering.
 
 ## Camera Fundamentals
 
@@ -385,6 +412,37 @@ async function loadLocalColorTexture() {
 }
 ```
 
+### Cancellation is loader-specific
+
+At r185, `LoadingManager.abort()` requests group cancellation only for loaders
+that implement `Loader.abort()` and browsers supporting `AbortSignal.any()`.
+Core `FileLoader` and `ImageBitmapLoader` support it; there is no universal
+loader abort or dispose contract. Treat cancellation separately from failure:
+
+```ts
+const manager = new THREE.LoadingManager();
+const files = new THREE.FileLoader(manager);
+
+async function loadLevelJson(url: string) {
+  try {
+    return await files.loadAsync(url);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return null;
+    throw error;
+  }
+}
+
+function cancelLevelLoad() {
+  manager.abort();
+}
+```
+
+Audit each addon loader and its underlying loader before promising cancel. For
+example, `TextureLoader` uses `ImageLoader`, which does not make the manager's
+group abort effective. Abort supported work, dispose only loaders with a real
+`dispose()` method (often worker-backed decoders), and ignore stale completion
+through the scene/lifecycle token when an operation cannot be canceled.
+
 Annotate base-color and emissive textures with `SRGBColorSpace`. Keep normal,
 roughness, metalness, AO, displacement, and other data textures at
 `NoColorSpace`. See the official
@@ -440,7 +498,9 @@ function restart() {
 
 Removing an object from a scene does not release its GPU allocations. Dispose
 owned geometries, materials, textures, render targets, skeletons, controls,
-post-processing passes, loaders/workers, and renderer resources. Follow the
+post-processing passes, worker-backed loaders that expose `dispose()`, and
+renderer resources. Abort supported in-flight loads; a generic `Loader` has no
+universal disposal operation. Follow the
 [disposal guide](https://threejs.org/manual/en/how-to-dispose-of-objects.html)
 and [resource-tracker pattern](https://threejs.org/manual/en/cleanup.html).
 
@@ -450,6 +510,8 @@ function disposeObjectTree(root: THREE.Object3D) {
   const materials = new Set<THREE.Material>();
   const geometries = new Set<THREE.BufferGeometry>();
   const skeletons = new Set<THREE.Skeleton>();
+  const instancedMeshes = new Set<THREE.InstancedMesh>();
+  const batchedMeshes = new Set<THREE.BatchedMesh>();
 
   root.traverse((object) => {
     const renderable = object as THREE.Object3D & {
@@ -458,7 +520,15 @@ function disposeObjectTree(root: THREE.Object3D) {
       skeleton?: THREE.Skeleton;
     };
 
-    if (renderable.geometry?.isBufferGeometry) {
+    if (object instanceof THREE.InstancedMesh) instancedMeshes.add(object);
+    if (object instanceof THREE.BatchedMesh) batchedMeshes.add(object);
+
+    // BatchedMesh.dispose() owns its aggregate geometry. Other mesh types keep
+    // geometry ownership in the deduplicated catalog below.
+    if (
+      !(object instanceof THREE.BatchedMesh) &&
+      renderable.geometry?.isBufferGeometry
+    ) {
       geometries.add(renderable.geometry);
     }
     if (renderable.skeleton instanceof THREE.Skeleton) {
@@ -487,6 +557,8 @@ function disposeObjectTree(root: THREE.Object3D) {
     const source = texture.source.data as { close?: () => void } | undefined;
     source?.close?.(); // only because this function owns the texture source
   }
+  for (const object of instancedMeshes) object.dispose();
+  for (const object of batchedMeshes) object.dispose();
   for (const skeleton of skeletons) skeleton.dispose();
   for (const material of materials) material.dispose();
   for (const geometry of geometries) geometry.dispose();
@@ -499,7 +571,11 @@ skeletons, and environment maps require reference or catalog ownership rather
 than blind traversal. `ImageBitmap` sources can also require `close()` after
 their textures are no longer used. Register textures hidden in shader uniforms,
 node graphs, arrays, caches, or render pipelines explicitly; a shallow material
-property scan cannot discover every custom resource.
+property scan cannot discover every custom resource. The object-level disposers
+above release internal instance/batch allocations that geometry and material
+traversal cannot see. `InstancedMesh` still relies on the shared catalogs for its
+geometry and material; `BatchedMesh` owns its aggregate geometry, so the helper
+excludes that geometry from the generic set and disposes it exactly once.
 
 Application teardown order:
 
@@ -538,9 +614,9 @@ visibility, and audio listeners through the same lifecycle owner.
 
 Before adding deep gameplay or rendering polish, prove:
 
-- The installed package and lockfile agree on an r185+ revision (or the
-  preserved project version below that floor only when upgrading is out of
-  scope—and then do not copy r185+ APIs blindly).
+- The installed runtime, lockfile, and `@types/three` revision intentionally
+  align. Any revision other than the verified r185 baseline has matching
+  migration/source checks recorded before baseline APIs are copied.
 - Imports resolve locally and the production preview performs no outbound
   runtime requests.
 - The canvas is nonblank, camera framing is intentional, and no object is

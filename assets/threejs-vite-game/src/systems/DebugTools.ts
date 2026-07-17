@@ -17,11 +17,18 @@ const CONTROLS: Array<{ key: NumericKey; min: number; max: number; step: number 
   { key: 'exposure', min: 0.6, max: 1.8, step: 0.01 },
 ];
 
+const ENABLE_GAME_DIAGNOSTICS =
+  import.meta.env.DEV ||
+  import.meta.env.VITE_ENABLE_GAME_DIAGNOSTICS === 'true';
+
 export class DebugTools {
   private panel: HTMLElement | null = null;
 
   constructor(tuning: DebugTuning, onChange: () => void) {
-    if (!new URLSearchParams(window.location.search).has('debug')) return;
+    if (
+      !ENABLE_GAME_DIAGNOSTICS ||
+      !new URLSearchParams(window.location.search).has('debug')
+    ) return;
 
     const panel = document.createElement('aside');
     panel.className = 'debug-panel';

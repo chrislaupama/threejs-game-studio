@@ -5,7 +5,7 @@
 A single, self-contained AI skill for planning, building, polishing, debugging,
 optimizing, testing, and releasing complete browser games with Three.js.
 
-The root `SKILL.md` is the sole coordinator. It inspects the project and Three.js
+The root `SKILL.md` is the control plane. It inspects the project and Three.js
 revision, chooses the WebGL or WebGPU path, translates novice ideas into safe
 defaults, loads only the relevant internal reference chapters, sequences the
 work from design through release, and requires browser evidence before making
@@ -17,9 +17,9 @@ quality claims.
   premium/showcase passes, and release candidates.
 - Beginner foundations for scene graphs, cameras, coordinates, transforms,
   timers, resizing, loading, errors, and disposal.
-- Current renderer-specific guidance for WebGL/GLSL/EffectComposer and
-  WebGPU/TSL/RenderPipeline without mixing incompatible recipes.
-- A dedicated WebGPU playbook covering the heavy-3D decision, actual-backend
+- Version-aware renderer guidance for WebGL/GLSL/EffectComposer and
+  experimental WebGPU/TSL/RenderPipeline without mixing incompatible recipes.
+- A dedicated experimental WebGPU playbook covering the heavy-3D decision, actual-backend
   reporting, WebGL 2 fallback semantics, node materials, compute, clustered
   lights, compressed textures, pipeline ownership, profiling, and release QA.
 - Game design, genre completion contracts, state, input actions, camera rigs,
@@ -39,10 +39,13 @@ quality claims.
 - Load budgets, upgrade/networking boundary manuals, golden evals, asset audit,
   and a unified `ship-check` release pipeline.
 
-This skill targets **Three.js r185 and onwards**. Greenfield installs should use
-current npm latest (`npm install three`); always verify APIs against the
-project's installed revision, matching official docs/migration notes, and then
-these recipes. Operational guidance lives in `SKILL.md` and `references/`.
+This skill uses **Three.js r185 / npm `three@0.185.1` as its verified recipe
+baseline**. A generated project starts from that reproducible lockfile, checks
+current stable, and upgrades deliberately when they differ; an existing game
+preserves its installed revision unless an upgrade is requested. Always verify
+version-sensitive APIs against the installed runtime,
+matching official source/docs/migration notes, and the separately maintained
+`@types/three` compile contract. Operational guidance lives in `SKILL.md` and `references/`.
 Reusable project templates and the starter game live in `assets/`; npm-driven
 TypeScript validation and scaffold tools live in `scripts/`.
 
@@ -68,7 +71,7 @@ npm install
 npm run create:game -- ./my-game
 npm run create:game -- ./my-runner --genre runner
 cd ./my-game
-npm install
+npm ci
 npm run setup:browsers
 npm run dev
 ```
@@ -81,14 +84,18 @@ while preserving useful ownership and verification seams.
 
 ```bash
 npm install
+npm run setup:browsers
 npm run verify
-npm --prefix assets/threejs-vite-game install
+npm run audit:official-links
+npm --prefix assets/threejs-vite-game ci
 npm --prefix assets/threejs-vite-game run setup:browsers
 npm --prefix assets/threejs-vite-game run build
 npm --prefix assets/threejs-vite-game test
-npm run ship-check -- assets/threejs-vite-game --skip-canvas
 npm run audit:assets -- scripts/fixtures
 ```
+
+`audit:official-links` is an on-demand networked maintenance check and is kept
+separate from deterministic `verify` so offline development remains supported.
 
 For a generated game, stop `npm run dev` with <kbd>Ctrl</kbd>+<kbd>C</kbd>
 before running its tests—the Playwright suite owns its loopback server. Validate
@@ -99,15 +106,31 @@ npm run setup:browsers
 npm run build
 npm test
 npm run audit:local
-npm run preview
+npm run audit:apis
+npm run audit:assets
 ```
 
-Leave preview running and inspect it from a second terminal. Development and
-preview intentionally share port `5188`, so the inspector needs no URL flag:
+Fill `docs/game-report.md` with measured evidence, then run `npm run
+ship-check`. The release command intentionally rejects the untouched template,
+skipped canvas evidence, unsupported quality claims, and a final clean
+production bundle that renders blank or fails at startup even when its separate
+instrumented evidence build succeeds.
+
+For a standalone visual inspection, run `npm run preview` and leave it running
+while the following inspector commands execute in a second terminal.
+
+Development, preview, and Playwright intentionally share port `5188`, so the
+inspector needs no URL flag. If that port is occupied, set the same validated
+override for the owning command (for example, `THREE_GAME_PORT=5288 npm test`)
+and pass the matching inspector URL when running it separately:
 
 ```bash
 npm run inspect:canvas
 npm run inspect:canvas -- --mobile
+
+# Collision-safe alternative:
+THREE_GAME_PORT=5288 npm run preview
+npm run inspect:canvas -- --url http://127.0.0.1:5288
 ```
 
 ## Documentation sources and attribution

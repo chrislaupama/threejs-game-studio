@@ -9,21 +9,27 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
+    "build:e2e": "tsc && vite build --outDir .e2e-dist",
     "preview": "vite preview --host 127.0.0.1",
+    "preview:e2e": "vite preview --outDir .e2e-dist --host 127.0.0.1",
     "test": "playwright test",
+    "test:desktop": "playwright test --project desktop-chrome",
+    "test:mobile": "playwright test --project mobile-chrome",
     "verify:visual": "playwright test tests/visual.spec.ts",
+    "verify:three": "node -e \"import('three').then(({ REVISION }) => { const value = String(REVISION).trim(); const revision = Number(value); if (!/^\\d+$/.test(value) || !Number.isSafeInteger(revision) || revision < 185) throw new Error('Three.js r185 or newer is required; found r' + REVISION); if (revision > 185) console.warn('Three.js r' + REVISION + ' is newer than this scaffold verified; review the migration guide and visual baselines.'); console.log('Three.js r' + REVISION); })\"",
+    "verify": "npm run verify:three && npm run build && npm run audit:local && npm test && npm run build && npm run audit:local",
     "inspect:canvas": "node --import tsx scripts/inspect-threejs-canvas.ts",
     "audit:local": "node --import tsx scripts/audit-local-only.ts",
     "setup:browsers": "playwright install chromium"
   },
   "dependencies": {
-    "three": "^0.185.0"
+    "three": ">=0.185.1 <0.186.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
     "@types/node": "^25.9.0",
     "@types/pngjs": "^6.0.5",
-    "@types/three": "^0.185.0",
+    "@types/three": ">=0.185.1 <0.186.0",
     "pngjs": "^7.0.0",
     "tsx": "^4.23.1",
     "typescript": "^6.0.3",

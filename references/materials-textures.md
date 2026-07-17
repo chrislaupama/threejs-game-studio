@@ -36,7 +36,7 @@ Choose from the smallest material that produces the intended image:
 | --- | --- |
 | Intentionally unlit UI marker, debug proxy, or flat graphic | `MeshBasicMaterial` |
 | General game-world PBR surface | `MeshStandardMaterial` |
-| Clearcoat, transmission, sheen, iridescence, or anisotropy | `MeshPhysicalMaterial` |
+| Clearcoat, transmission, dispersion, sheen, iridescence, or anisotropy | `MeshPhysicalMaterial` |
 | Toon ramp | `MeshToonMaterial` |
 | Legacy/specular art that specifically needs it | `MeshPhongMaterial` |
 | WebGL-only custom GLSL | `ShaderMaterial` after a built-in material cannot do it |
@@ -61,8 +61,9 @@ Treat these as different data classes:
 - Color: base color/albedo, emissive color, sheen color, and specular color.
 - Non-color data: normal, roughness, metalness, ambient occlusion, height,
   displacement, alpha masks, thickness, transmission amount, and lookup data.
-- HDR lighting: linear high-dynamic-range radiance, normally configured by
-  `HDRLoader`.
+- HDR/EXR lighting and float light maps: linear high-dynamic-range color data.
+  Current `HDRLoader` and `EXRLoader` outputs are already tagged
+  `LinearSRGBColorSpace`; preserve that loader metadata.
 
 The material does not own its textures. Disposing a material does not dispose
 any map assigned to it.
@@ -76,14 +77,43 @@ attribute:
 ```ts
 import * as THREE from 'three';
 
+async function loadTextureSet(
+  loader: THREE.TextureLoader,
+  paths: readonly string[],
+) {
+  // Wait for every sibling request before failing so late successes can be
+  // disposed instead of escaping after Promise.all() rejects early.
+  const urls = paths.map((path) => publicAssetUrl(path));
+  const settled = await Promise.allSettled(
+    urls.map((url) => loader.loadAsync(url)),
+  );
+  const textures = settled.flatMap((result) =>
+    result.status === 'fulfilled' ? [result.value] : [],
+  );
+  const failure = settled.find(
+    (result): result is PromiseRejectedResult =>
+      result.status === 'rejected',
+  );
+
+  if (failure) {
+    for (const texture of textures) texture.dispose();
+    throw failure.reason;
+  }
+
+  return textures;
+}
+
 export async function createPaintedMetal() {
   const loader = new THREE.TextureLoader();
-  const [baseColor, normal, roughness, metalness] = await Promise.all([
-    loader.loadAsync(publicAssetUrl('assets/materials/panel/base-color.webp')),
-    loader.loadAsync(publicAssetUrl('assets/materials/panel/normal.webp')),
-    loader.loadAsync(publicAssetUrl('assets/materials/panel/roughness.webp')),
-    loader.loadAsync(publicAssetUrl('assets/materials/panel/metalness.webp')),
-  ]);
+  const [baseColor, normal, roughness, metalness] = await loadTextureSet(
+    loader,
+    [
+      'assets/materials/panel/base-color.webp',
+      'assets/materials/panel/normal.webp',
+      'assets/materials/panel/roughness.webp',
+      'assets/materials/panel/metalness.webp',
+    ],
+  );
 
   baseColor.colorSpace = THREE.SRGBColorSpace;
   normal.colorSpace = THREE.NoColorSpace;
@@ -155,23 +185,27 @@ const coatedPlastic = new THREE.MeshPhysicalMaterial({
   clearcoatRoughness: 0.12,
 });
 
-const thinGlass = new THREE.MeshPhysicalMaterial({
+const volumeGlass = new THREE.MeshPhysicalMaterial({
   color: 0xffffff,
   metalness: 0,
   roughness: 0.04,
+  opacity: 1,
   transmission: 1,
   thickness: 0.08,
   ior: 1.5,
+  dispersion: 0.06,
   attenuationColor: new THREE.Color(0xd8f2ff),
   attenuationDistance: 4,
 });
 ```
 
-Keep transmissive materials `transparent = false` unless ordinary alpha
-blending is separately required. Transmission invokes a screen-space
-refraction path and is substantially more expensive than opaque standard PBR.
-Clearcoat, sheen, iridescence, and anisotropy also add shader work; do not turn
-all of them on in a generic material factory.
+When `transmission` is nonzero, keep `opacity = 1`. Keep `transparent = false`
+unless ordinary alpha blending is separately required. A `thickness` of `0`
+models a thin-walled surface; a value above `0` models a volume boundary and
+enables distance-based attenuation. `dispersion` is meaningful only with
+transmission. The screen-space refraction path is substantially more expensive
+than opaque standard PBR. Clearcoat, sheen, iridescence, anisotropy, and
+dispersion also add shader work; enable only visible features.
 
 ### Material role kit
 
@@ -196,17 +230,32 @@ Use this table for manually loaded maps:
 | `map` / base color | `SRGBColorSpace` | RGB color; alpha optional |
 | `emissiveMap` | `SRGBColorSpace` | RGB multiplied by material emissive color |
 | `sheenColorMap`, `specularColorMap` | `SRGBColorSpace` | Color data |
+| HDR/EXR `envMap` or `lightMap` | `LinearSRGBColorSpace` | Linear RGB radiance or illuminance; preserve loader metadata |
 | `normalMap` | `NoColorSpace` | RGB direction data |
 | `roughnessMap` | `NoColorSpace` | Green channel |
 | `metalnessMap` | `NoColorSpace` | Blue channel |
 | `aoMap` | `NoColorSpace` | Red channel |
 | `alphaMap` | `NoColorSpace` | Green channel |
 | `bumpMap`, `displacementMap` | `NoColorSpace` | Height data |
-| Transmission/thickness/clearcoat numeric maps | `NoColorSpace` | Numeric data |
+| `clearcoatMap`, `iridescenceMap`, `transmissionMap` | `NoColorSpace` | Red channel multiplied by the material scalar |
+| `clearcoatRoughnessMap`, `iridescenceThicknessMap`, `thicknessMap` | `NoColorSpace` | Green channel multiplied or remapped by the material setting |
+| `sheenRoughnessMap`, `specularIntensityMap` | `NoColorSpace` | Alpha channel |
+| `clearcoatNormalMap` | `NoColorSpace` | RGB direction data for the coat layer |
+| `anisotropyMap` | `NoColorSpace` | RG direction in tangent space; blue strength |
 
 `NoColorSpace` is the default for ordinary textures, but setting it explicitly
 at an asset boundary documents intent. Do not label data maps
 `LinearSRGBColorSpace`; that asserts color meaning they do not have.
+
+In r185, `HDRLoader`, `EXRLoader`, and `UltraHDRLoader` return environment color
+data tagged `LinearSRGBColorSpace`. Preserve that value for radiance. This is
+different from both nonlinear `SRGBColorSpace` color images and `NoColorSpace`
+numeric data.
+
+Physical feature maps modulate their matching scalar; they do not enable a
+feature whose scalar is `0`. For example, set `transmission > 0` before a
+`transmissionMap` can contribute, and set both `transmission > 0` and
+`thickness > 0` for a `thicknessMap` to describe a volume.
 
 `GLTFLoader` configures color space, UV channel, and orientation for textures
 inside a glTF asset. Do not reapply `flipY`, color space, or arbitrary wrapping
@@ -294,14 +343,99 @@ texture.center.set(0.5, 0.5);
 texture.rotation = Math.PI / 8;
 ```
 
-Set sampler state before first use when possible. After a texture has uploaded,
-changing `wrapS`, `wrapT`, `minFilter`, `magFilter`, or `anisotropy` requires
-`texture.needsUpdate = true` so the renderer rebuilds the GPU sampler state.
+Set upload and sampler state before first use. After upload, replacing
+same-sized source data or mipmaps, or changing `wrapS`, `wrapT`, `minFilter`,
+`magFilter`, `anisotropy`, `colorSpace`, `flipY`, `premultiplyAlpha`,
+`generateMipmaps`, or `unpackAlignment`, requires `texture.needsUpdate = true`.
+Changing `texture.channel` or `mapping` can alter the shader path; configure
+them before material compilation, or mark every borrowing material
+`needsUpdate = true` after the change.
 
 UV transforms are different: `offset`, `repeat`, `center`, and `rotation`
 update `texture.matrix` automatically while `matrixAutoUpdate` is true and do
 not require a texture re-upload. Avoid animating a shared UV transform when
 borrowers need different states; clone the texture object first.
+
+After initial use, a texture's dimensions, format, and type are immutable.
+Dispose it and create a new texture instead of mutating those fields. For an
+`ImageBitmap` source, texture-level `flipY` and `premultiplyAlpha` have no
+effect. During bitmap creation, use `ImageBitmapLoader.setOptions()` with an
+`imageOrientation` such as `'flipY'` and the intended `premultiplyAlpha` mode.
+
+### Replace a texture without losing sampling state
+
+Loading a new image creates a new texture with default sampling state. Preserve
+the old state explicitly when the replacement is intended to be semantically
+identical. Do not call `replacement.copy(previous)`: `Texture.copy()` also
+copies the old source/image and would defeat the replacement.
+
+```ts
+type TextureWithWrapR = THREE.Texture & { wrapR: THREE.Wrapping };
+
+function hasWrapR(texture: THREE.Texture): texture is TextureWithWrapR {
+  return (
+    'wrapR' in texture &&
+    typeof (texture as Partial<TextureWithWrapR>).wrapR === 'number'
+  );
+}
+
+function copyTextureSamplingState(
+  previous: THREE.Texture,
+  replacement: THREE.Texture,
+  maxAnisotropy: number,
+): void {
+  replacement.mapping = previous.mapping;
+  replacement.channel = previous.channel;
+
+  replacement.wrapS = previous.wrapS;
+  replacement.wrapT = previous.wrapT;
+  if (hasWrapR(previous) && hasWrapR(replacement)) {
+    replacement.wrapR = previous.wrapR;
+  }
+  replacement.magFilter = previous.magFilter;
+  replacement.minFilter = previous.minFilter;
+  replacement.anisotropy = Math.min(previous.anisotropy, maxAnisotropy);
+
+  replacement.offset.copy(previous.offset);
+  replacement.repeat.copy(previous.repeat);
+  replacement.center.copy(previous.center);
+  replacement.rotation = previous.rotation;
+  replacement.matrixAutoUpdate = previous.matrixAutoUpdate;
+  if (!previous.matrixAutoUpdate) replacement.matrix.copy(previous.matrix);
+
+  if (
+    previous instanceof THREE.DepthTexture &&
+    replacement instanceof THREE.DepthTexture
+  ) {
+    replacement.compareFunction = previous.compareFunction;
+  }
+
+  replacement.needsUpdate = true;
+}
+
+copyTextureSamplingState(
+  previousTexture,
+  replacementTexture,
+  renderer.capabilities.getMaxAnisotropy(),
+);
+material.map = replacementTexture;
+material.needsUpdate = true;
+```
+
+Copy state only when the replacement has the same semantic role, UV contract,
+and source orientation. Set `colorSpace`, `flipY`, `premultiplyAlpha`,
+`generateMipmaps`, and `unpackAlignment` from the **new source pipeline** rather
+than inheriting them blindly. `compareFunction` applies to depth textures; do
+not transfer it between ordinary color/data textures. The helper copies
+`wrapR` only when both compatible texture objects expose it. If the renderer or
+device changed, clamp anisotropy to the new device as above. Dispose the previous
+texture only after its final material/owner releases it.
+
+Changing `mapping`, `channel`, or depth-comparison behavior can change shader
+configuration, which is why every material borrowing the replaced slot must be
+marked `needsUpdate = true`. A manual UV matrix is copied only when
+`matrixAutoUpdate` is disabled; otherwise the copied offset/repeat/center/
+rotation values regenerate it.
 
 ### Filtering
 
@@ -318,7 +452,7 @@ worldTexture.anisotropy = Math.min(
 );
 ```
 
-WebGLRenderer requires WebGL 2 in r185, so old blanket rules that disable
+`WebGLRenderer` requires WebGL 2 in r185, so old blanket rules that disable
 mipmaps for non-power-of-two images are stale. Power-of-two source dimensions
 can still be useful for compression, atlases, and predictable mip chains.
 
@@ -365,8 +499,10 @@ material.normalScale.set(1, -1);
 ```
 
 Displacement changes vertices, not pixels. The geometry needs enough segments,
-and its bounds must cover the displaced result. Prefer a normal or bump map
-when silhouette change is not visible.
+and its bounds must cover the displaced result. GPU displacement does not
+automatically recompute the surface normals, so pair visible displacement with
+a matching normal map. Prefer a normal or bump map when silhouette change is
+not visible.
 
 ## Transparency And Special Surfaces
 
@@ -387,6 +523,10 @@ const leaf = new THREE.MeshStandardMaterial({
   side: THREE.DoubleSide,
 });
 ```
+
+For cutouts rendered into an MSAA-enabled target, test
+`leaf.alphaToCoverage = true` for smoother edges. It has no effect without
+multisampling and remains an art/performance tradeoff rather than a sorting fix.
 
 `DoubleSide` can double work and may force extra passes for transparent
 materials. Fix geometry/winding first. Use `forceSinglePass` only after a visual
@@ -415,9 +555,11 @@ scene.backgroundRotation.y = Math.PI * 0.15;
 ```
 
 Current renderers prefilter supported equirectangular environment textures for
-PBR. Load HDR radiance with `HDRLoader`; do not tag it sRGB. Environment light
-does not create cast shadows. Add a directional/spot/point shadow light or a
-cheap contact cue when grounding matters.
+PBR. For environment radiance, `HDRLoader` (`.hdr`), `EXRLoader` (`.exr`), and
+`UltraHDRLoader` (Ultra HDR JPEG) set `LinearSRGBColorSpace`; do not overwrite
+that with `SRGBColorSpace` or `NoColorSpace`. Environment light does not create
+cast shadows. Add a directional/spot/point shadow light or a cheap contact cue
+when grounding matters.
 
 Per-material `envMap` overrides the scene environment for that material. Use it
 sparingly; a shared scene environment is easier to keep coherent and cache.
@@ -485,6 +627,9 @@ material per object.
 - Prefer opaque or cutout rendering over blended transparency.
 - Keep `MeshPhysicalMaterial` features limited to hero surfaces where they are
   visible.
+- On `WebGLRenderer`, lower `renderer.transmissionResolutionScale` below `1`
+  only after comparing refractive detail and GPU time; it reduces the shared
+  transmission buffer resolution, not the cost of every physical feature.
 - Avoid per-frame canvas texture uploads. Set `needsUpdate` only after actual
   content changes.
 - Track `renderer.info.memory.textures`, material count, shader programs,
@@ -509,6 +654,10 @@ function disposeMaterials(materials: THREE.Material[]) {
   for (const texture of textures) texture.dispose();
 }
 ```
+
+The property scan finds direct material texture slots. It does not discover
+textures nested in `ShaderMaterial` uniforms, node graphs, custom containers,
+or render targets; those need explicit ownership and disposal.
 
 Special sources need browser cleanup too:
 
@@ -548,11 +697,15 @@ only after the final borrower is gone.
 - [Textures manual](https://threejs.org/manual/en/textures.html)
 - [Texture API](https://threejs.org/docs/pages/Texture.html)
 - [TextureLoader](https://threejs.org/docs/pages/TextureLoader.html)
+- [ImageBitmapLoader](https://threejs.org/docs/pages/ImageBitmapLoader.html)
 - [MeshStandardMaterial](https://threejs.org/docs/pages/MeshStandardMaterial.html)
 - [MeshPhysicalMaterial](https://threejs.org/docs/pages/MeshPhysicalMaterial.html)
 - [Material](https://threejs.org/docs/pages/Material.html)
 - [CanvasTexture](https://threejs.org/docs/pages/CanvasTexture.html)
 - [VideoTexture](https://threejs.org/docs/pages/VideoTexture.html)
 - [KTX2Loader](https://threejs.org/docs/pages/KTX2Loader.html)
+- [HDRLoader](https://threejs.org/docs/pages/HDRLoader.html)
+- [EXRLoader](https://threejs.org/docs/pages/EXRLoader.html)
+- [UltraHDRLoader](https://threejs.org/docs/pages/UltraHDRLoader.html)
 - [Scene environment and background](https://threejs.org/docs/pages/Scene.html)
 - [How to dispose of objects](https://threejs.org/manual/en/how-to-dispose-of-objects.html)

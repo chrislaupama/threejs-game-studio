@@ -280,29 +280,72 @@ Match rumble to the hit: light (180ms, 0.3) on pickups, heavy (250ms, 0.9) on de
 
 ## Audio Feel Coupling
 
-Identical repeated samples feel cheap: the ear detects the exact repeat as artificial (the "machine-gun" effect). Vary pitch per playback, and duck ambient/music while hitstop holds so the impact reads.
+Identical repeated samples feel cheap: the ear detects the exact repeat as
+artificial (the "machine-gun" effect). Vary pitch per playback, and duck
+ambient/music while hitstop holds so the impact reads. Inject buses owned by
+the main audio system; a feel helper must not create another `AudioContext` or
+connect individual voices directly to `context.destination` and bypass master,
+mute, compressor, pause, or accessibility controls.
 
 ```ts
-// AudioSystem: pitch-vary each shot; duck holds during hitstop.
-private duck = 1;
+type AudioFeelBuses = {
+  sfx: GainNode;
+  musicAndAmbience: GainNode;
+};
+
+// Fields/methods inside AudioSystem. The bus owner alone connects to master.
+private readonly activeFeelVoices = new Set<{
+  source: AudioBufferSourceNode;
+  gain: GainNode;
+}>();
+
+constructor(
+  private readonly context: AudioContext,
+  private readonly buses: AudioFeelBuses,
+) {}
 
 play(buffer: AudioBuffer, rng: () => number, baseGain = 0.8): void {
-  if (!this.context || this.context.state !== 'running') return;
+  if (this.context.state !== 'running') return;
   const source = this.context.createBufferSource();
   const gain = this.context.createGain();
+  const voice = { source, gain };
   source.buffer = buffer;
   source.playbackRate.value = 1 + (rng() - 0.5) * 0.12; // +/-6% pitch
-  gain.gain.value = baseGain * this.duck;
-  source.connect(gain).connect(this.context.destination);
+  gain.gain.value = baseGain;
+  source.connect(gain).connect(this.buses.sfx);
+  this.activeFeelVoices.add(voice);
+  source.onended = () => {
+    source.disconnect();
+    gain.disconnect();
+    this.activeFeelVoices.delete(voice);
+  };
   source.start();
 }
 
-setDuck(value: number): void {
-  this.duck = value; // e.g. 0.6 while hitstop is active, 1 otherwise
+setMusicDuck(value: number): void {
+  const target = Math.max(0, Math.min(1, value));
+  this.buses.musicAndAmbience.gain.setTargetAtTime(
+    target, // e.g. 0.6 while hitstop is active, 1 otherwise
+    this.context.currentTime,
+    0.015,
+  );
+}
+
+stopFeelVoices(): void {
+  for (const voice of this.activeFeelVoices) {
+    voice.source.onended = null;
+    try { voice.source.stop(); } catch { /* already stopped */ }
+    voice.source.disconnect();
+    voice.gain.disconnect();
+  }
+  this.activeFeelVoices.clear();
 }
 ```
 
-Pass `this.rng` (the seeded RNG) as the `rng` argument so pitch variance stays deterministic under test.
+Pass `this.rng` (the seeded RNG) as the `rng` argument so pitch variance stays
+deterministic under test. Construct every injected bus from the same context,
+connect it once through the owned mix graph, and restore ducking on resume,
+restart, and teardown.
 
 ## Tuning Table
 

@@ -45,7 +45,9 @@ export class Player {
     const nose = new THREE.Mesh(this.noseGeometry, this.accentMaterial);
     nose.castShadow = true;
     nose.position.set(0, 0.68, -0.58);
-    nose.rotation.x = Math.PI / 2;
+    // ConeGeometry points along +Y. Rotate its tip toward the authored local
+    // forward axis (-Z), which is also used for movement and projectiles.
+    nose.rotation.x = -Math.PI / 2;
     this.group.add(nose);
     this.presentation = new InterpolatedTransform(this.group);
   }
@@ -64,7 +66,9 @@ export class Player {
     this.group.position.z = THREE.MathUtils.clamp(this.group.position.z, -bounds.halfDepth + 0.8, bounds.halfDepth - 0.8);
 
     if (this.velocity.lengthSq() > 0.001) {
-      this.group.rotation.y = Math.atan2(this.velocity.x, -this.velocity.z);
+      // A -PI / 2 yaw maps local -Z to world +X. Negating X keeps the model's
+      // facing direction aligned with its actual velocity in every quadrant.
+      this.group.rotation.y = Math.atan2(-this.velocity.x, -this.velocity.z);
     }
 
     this.group.position.y = 0.06 + Math.sin(elapsed * 9) * Math.min(this.velocity.length() / 40, 0.08);

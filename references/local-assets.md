@@ -3,13 +3,24 @@
 ## Contents
 
 - Allowed sources, stable layout, catalog, and provenance
-- Local GLB/FBX intake, animation lifecycle, and disposal
+- Compression-aware local loader boundary, GLB/FBX intake, and ownership
 - Local 2D, texture/material, font/UI, and audio handling
 - Static and live local-only verification
 
 Use this reference whenever models, textures, fonts, sprites, maps, or audio are
 added or replaced. The project must remain independent of remote services and
 runtime network access.
+
+This file owns the project-local URL, provenance, and intake boundary. Read
+`loaders-animation.md` for the normative loader, retry, animation, cloning, and
+GPU-resource disposal recipes instead of duplicating those implementations
+here.
+
+Primary Three.js references: [GLTFLoader](https://threejs.org/docs/pages/GLTFLoader.html),
+[LoadingManager](https://threejs.org/docs/pages/LoadingManager.html),
+[DRACOLoader](https://threejs.org/docs/pages/DRACOLoader.html),
+[KTX2Loader](https://threejs.org/docs/pages/KTX2Loader.html), and the
+[disposal guide](https://threejs.org/manual/en/how-to-dispose-of-objects.html).
 
 ## Allowed Sources
 
@@ -36,6 +47,8 @@ public/assets/models/
 public/assets/textures/
 public/assets/audio/
 public/assets/fonts/
+public/assets/decoders/draco/gltf/   # only when a manifest uses DRACO
+public/assets/decoders/basis/        # only when a manifest uses KTX2/Basis
 src/assets/AssetCatalog.ts
 src/assets/ModelLoader.ts
 src/assets/MaterialLibrary.ts
@@ -59,7 +72,19 @@ project-relative path through `import.meta.env.BASE_URL`:
 ```ts
 export function publicAssetUrl(relativePath: string): string {
   const localPath = relativePath.replace(/^\/+/, '');
-  if (!localPath || /^[a-z][a-z\d+.-]*:/i.test(localPath)) {
+  let decodedPath: string;
+  try {
+    decodedPath = decodeURIComponent(localPath);
+  } catch {
+    throw new Error(`Invalid encoded asset path: ${relativePath}`);
+  }
+  const segments = decodedPath.split('/');
+  if (
+    !localPath ||
+    /^[a-z][a-z\d+.-]*:/i.test(decodedPath) ||
+    /[\\?#%\0]/.test(decodedPath) ||
+    segments.some((segment) => segment === '.' || segment === '..')
+  ) {
     throw new Error(`Expected a project-local public asset path: ${relativePath}`);
   }
   return `${import.meta.env.BASE_URL}${localPath}`;
@@ -80,6 +105,18 @@ export const assets = {
     scale: 1,
     forward: '+z',
     up: '+y',
+    // Copied from the inspected glTF extensionsUsed array during asset intake.
+    gltfExtensions: [
+      'KHR_draco_mesh_compression',
+      'KHR_texture_basisu',
+    ],
+  },
+  crate: {
+    modelUrl: publicAssetUrl('assets/models/crate.glb'),
+    scale: 1,
+    forward: '+z',
+    up: '+y',
+    gltfExtensions: [], // ordinary GLB: GLTFLoader needs no decoder stack
   },
   pickup: {
     textureUrl: publicAssetUrl('assets/textures/pickup.png'),
@@ -87,7 +124,9 @@ export const assets = {
 } as const;
 ```
 
-The catalog contains only project paths and integration metadata. It must not
+The catalog contains only project paths and integration metadata. Record
+`extensionsUsed` from an intake/build-time inspection; do not guess compression
+from the filename or instantiate every decoder pre-emptively. It must not
 contain provider IDs, API keys, expiring URLs, or remote fallbacks.
 
 ## Imported Model Contract
@@ -102,6 +141,9 @@ once in an asset wrapper:
 
 - Confirm units, scale, model-local forward/up axes, handedness, pivot, bounds,
   and active-play silhouette.
+- For animated `SkinnedMesh` content, validate a conservative bound across every
+  required clip or deliberately recompute its box/sphere after pose changes.
+  Bind-pose bounds are not evidence that animated culling is safe.
 - Keep canonical asset transforms separate from gameplay/presentation offsets.
 - Record mesh, material, texture, triangle, file-size, and animation-clip counts
   when meaningful.
@@ -114,129 +156,154 @@ once in an asset wrapper:
 
 Do not silently replace a failed local file with a remote URL.
 
-## GLB And Animation Lifecycle
+## Compression-Aware Local GLTF Boundary
 
-Keep loading, wrapper normalization, semantic clips, mixer updates, and teardown
-under one asset owner. Adapt this shape to the project's error/loading state:
+The inspected asset manifest decides which optional support an asset receives.
+A plain glTF/GLB needs `GLTFLoader` alone:
+
+| Inspected `extensionsUsed` entry | Add only this support |
+| --- | --- |
+| none of the entries below | `GLTFLoader` only |
+| `KHR_draco_mesh_compression` | `DRACOLoader` |
+| `EXT_meshopt_compression` | `MeshoptDecoder` |
+| `KHR_texture_basisu` | `KTX2Loader` after renderer support detection |
+
+An asset can require more than one row. Capture these strings during intake from
+the glTF JSON or GLB JSON chunk and commit them to the asset catalog. Do not
+guess from a filename, configure every decoder for every model, or parse a GLB a
+second time in the browser merely to decide its loader stack.
+
+The ordinary path stays deliberately small:
 
 ```ts
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-const loader = new GLTFLoader();
+const manager = new THREE.LoadingManager();
+const loader = new GLTFLoader(manager); // no DRACO, Meshopt, or KTX2 for plain GLB
+const crate = await loader.loadAsync(assets.crate.modelUrl);
+```
 
-function disposeOwnedActorResources(root: THREE.Object3D) {
-  const geometries = new Set<THREE.BufferGeometry>();
-  const materials = new Set<THREE.Material>();
-  const textures = new Set<THREE.Texture>();
-  const skeletons = new Set<THREE.Skeleton>();
-  const imageBitmaps = new Set<ImageBitmap>();
+When the manifest declares compression, configure only the declared features.
+The following boundary dynamically imports optional decoder code and uses
+explicit project-owned fallback directories. Copy those directories from the
+matching installed Three.js revision during project setup; never mix decoder
+files from another revision or replace a missing local file with a CDN URL.
 
-  root.traverse((object) => {
-    const renderable = object as THREE.Object3D & {
-      geometry?: THREE.BufferGeometry;
-      material?: THREE.Material | THREE.Material[];
-      skeleton?: THREE.Skeleton;
-    };
-    if (renderable.geometry?.isBufferGeometry) {
-      geometries.add(renderable.geometry);
-    }
-    if (renderable.skeleton instanceof THREE.Skeleton) {
-      skeletons.add(renderable.skeleton);
-    }
-    const ownedMaterials = Array.isArray(renderable.material)
-      ? renderable.material
-      : renderable.material
-        ? [renderable.material]
-        : [];
-    for (const material of ownedMaterials) materials.add(material);
-  });
+```ts
+import * as THREE from 'three';
+import type { WebGPURenderer } from 'three/webgpu';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-  for (const material of materials) {
-    for (const value of Object.values(material)) {
-      if (value && (value as THREE.Texture).isTexture) {
-        textures.add(value as THREE.Texture);
-      }
-    }
+type CompressionRenderer = THREE.WebGLRenderer | WebGPURenderer;
+type ModelRecord = {
+  modelUrl: string;
+  gltfExtensions: readonly string[];
+};
+
+export async function createLocalLoaderFor(
+  asset: ModelRecord,
+  manager: THREE.LoadingManager,
+  renderer?: CompressionRenderer,
+) {
+  const extensions = new Set(asset.gltfExtensions);
+  const loader = new GLTFLoader(manager);
+  const releaseDecoderPools: Array<() => void> = [];
+
+  if (extensions.has('KHR_draco_mesh_compression')) {
+    const { DRACOLoader } = await import(
+      'three/addons/loaders/DRACOLoader.js'
+    );
+    const draco = new DRACOLoader(manager)
+      .setDecoderPath(publicAssetUrl('assets/decoders/draco/gltf/'))
+      .setWorkerLimit(2);
+    loader.setDRACOLoader(draco);
+    releaseDecoderPools.push(() => draco.dispose());
   }
-  for (const texture of textures) {
-    texture.dispose();
-    const sourceData: unknown = texture.source.data;
-    if (
-      typeof ImageBitmap !== 'undefined' &&
-      sourceData instanceof ImageBitmap
-    ) {
-      imageBitmaps.add(sourceData);
-    }
+
+  if (extensions.has('EXT_meshopt_compression')) {
+    const { MeshoptDecoder } = await import(
+      'three/addons/libs/meshopt_decoder.module.js'
+    );
+    loader.setMeshoptDecoder(MeshoptDecoder);
   }
-  for (const imageBitmap of imageBitmaps) imageBitmap.close();
-  for (const skeleton of skeletons) skeleton.dispose();
-  for (const material of materials) material.dispose();
-  for (const geometry of geometries) geometry.dispose();
-  root.removeFromParent();
-}
 
-export async function loadLocalActor(url: string) {
-  const gltf = await loader.loadAsync(url);
-  const wrapper = new THREE.Group();
-  wrapper.name = 'actor-wrapper';
-  wrapper.add(gltf.scene);
-
-  // Apply canonical scale/forward/up/pivot corrections to gltf.scene once.
-  // Keep wrapper.position/rotation for gameplay presentation.
-  const mixer = gltf.animations.length
-    ? new THREE.AnimationMixer(gltf.scene)
-    : undefined;
-  const clips = new Map(gltf.animations.map((clip) => [clip.name, clip]));
-  let currentAction: THREE.AnimationAction | undefined;
+  if (extensions.has('KHR_texture_basisu')) {
+    if (!renderer) {
+      throw new Error('KTX2 asset requires an initialized renderer');
+    }
+    // For WebGPU, the caller must await renderer.init() before this factory.
+    const { KTX2Loader } = await import(
+      'three/addons/loaders/KTX2Loader.js'
+    );
+    const ktx2 = new KTX2Loader(manager)
+      .setTranscoderPath(publicAssetUrl('assets/decoders/basis/'))
+      .setWorkerLimit(2)
+      .detectSupport(renderer);
+    loader.setKTX2Loader(ktx2);
+    releaseDecoderPools.push(() => ktx2.dispose());
+  }
 
   return {
-    root: wrapper,
-    clips,
-    update(deltaSeconds: number) {
-      mixer?.update(deltaSeconds);
-    },
-    play(name: string, fadeSeconds = 0.12) {
-      const clip = clips.get(name);
-      if (!clip || !mixer) return false;
-      const nextAction = mixer.clipAction(clip);
-      if (nextAction === currentAction) return true;
-      nextAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).play();
-      if (currentAction) currentAction.crossFadeTo(nextAction, fadeSeconds, false);
-      else nextAction.fadeIn(fadeSeconds);
-      currentAction = nextAction;
-      return true;
-    },
-    dispose() {
-      mixer?.stopAllAction();
-      mixer?.uncacheRoot(gltf.scene);
-      currentAction = undefined;
-      disposeOwnedActorResources(wrapper);
+    loader,
+    abortPending: () => manager.abort(),
+    disposeLoaderDomain() {
+      manager.abort();
+      for (const release of releaseDecoderPools) release();
     },
   };
 }
 ```
 
-This implementation assumes one actor owner owns the loaded GPU resources. If
-instances borrow geometry/materials/textures from a cache, replace direct
-disposal with a reference-counted cache release; never let one borrower free
-resources still used by another. Register textures hidden in shader uniforms
-or node graphs explicitly because shallow material inspection cannot find them.
+The two-worker limits are starting budgets, not promises. Coordinate them with
+other worker pools and measure constrained devices. Reuse this returned loader
+within its coherent asset domain; do not create decoder workers per actor. A
+fresh retry phase needs a fresh manager because its item counters are
+cumulative. `LoadingManager.onProgress` reports completed items, not bytes, and
+`abort()` is best effort, so preserve attempt tokens and dispose late results.
 
-- Map source clip names to gameplay semantics (`idle`, `move`, `attack`,
-  `hurt`, `defeat`) in the asset catalog. Do not make game rules depend on
-  exporter-specific names or array order.
-- Decide root motion per clip. For arcade movement, keep simulation transforms
-  authoritative and remove or ignore horizontal clip displacement during a
-  deliberate local preprocessing/intake step; preserve useful vertical motion.
-- Stop/fade the previous action rather than starting unlimited actions. Update
-  each mixer exactly once with simulation or animation delta chosen by design.
-- Use `SkeletonUtils.clone` from `three/addons/utils/SkeletonUtils.js` for
-  independent rigged copies. Ordinary `Object3D.clone()` is not a safe default
-  for separately animated skinned instances.
-- Record missing clips, binding warnings, durations, track counts, and visible
-  loading failure. A model that loads but cannot enter required gameplay states
-  has failed intake.
+In r185 the addon loaders also provide version-matched module-relative support
+files. Use those defaults when the production bundler emits them correctly; use
+the explicit local directories above when the deployment/CSP requires stable
+public URLs. Test the production build under its real base path either way.
+
+Prefer GLB. If a local `.gltf` is required, every external buffer and image URI
+resolves relative to the model URL. Verify that each dependency exists, remains
+inside the project boundary after symlink resolution, and has no remote or
+filesystem scheme.
+
+## Asset And Animation Ownership Hand-Off
+
+The loader domain and loaded asset are different owners:
+
+- The loader domain owns its manager and DRACO/KTX2 worker pools. Dispose it
+  only after no later load in that domain can need those decoders.
+- The asset cache retains the complete `gltf.scenes` collection, clips,
+  geometries, materials, textures, and source skeletons. An instance borrows
+  those resources through a lease.
+- A game instance owns its wrapper, mixer, listeners, actions, and any
+  instance-specific material/skeleton clones. On removal it stops actions,
+  uncaches its root, detaches the wrapper, disposes only its exclusive clones,
+  and releases the cache lease.
+- The final source owner deduplicates and disposes GPU resources across every
+  retained glTF scene. It closes an `ImageBitmap` only after proving nothing
+  else shares it; custom shader/node textures and non-scene resources need
+  explicit registration.
+
+Do not let an actor instance directly dispose cache-shared geometry, materials,
+or textures. Keep canonical scale/axis/pivot correction on the loaded model
+under a gameplay wrapper, map exporter clip names to semantic states, decide
+root motion explicitly, and use the `clone()` export from
+`three/addons/utils/SkeletonUtils.js` for independently animated rigged
+instances.
+
+Use the complete implementations and edge cases in
+`loaders-animation.md#production-gltf-loader-stack`,
+`loaders-animation.md#clone-animated-assets-safely`, and
+`loaders-animation.md#disposal-and-ownership`. That reference is the
+normative owner for loading UI, retries, animation state, cloning, and teardown;
+this file remains the normative owner for local paths, provenance, and the
+asset-intake boundary.
 
 ## Local 2D Authoring Workflow
 
@@ -258,13 +325,36 @@ temporary download paths in the runtime catalog.
 
 ## Texture And Material Contract
 
-- Set base-color/emissive textures to `THREE.SRGBColorSpace`; keep data maps in
-  the appropriate linear/non-color space.
-- Set wrapping, repeat, mipmaps, filtering, anisotropy, and `flipY` deliberately.
+- `GLTFLoader` already sets `flipY = false` and assigns sRGB color space to
+  color-bearing glTF slots such as base color and emissive. Do not overwrite
+  that metadata blindly.
+- When replacing a glTF map with `TextureLoader`, set the replacement's
+  metadata deliberately: use `THREE.SRGBColorSpace` for base-color/emissive,
+  keep normal/roughness/metalness/occlusion maps in `THREE.NoColorSpace`, and
+  normally set `flipY = false` to match glTF UV orientation. Preserve or
+  deliberately replace the original `channel`, UV transform, and sampler
+  settings; glTF can use a non-default UV set or `KHR_texture_transform`.
+- Set wrapping, repeat, mipmaps, filtering, and anisotropy deliberately. After
+  changing wrap/filter modes, set `texture.needsUpdate = true`. Clamp
+  anisotropy to the renderer's reported maximum.
+- After first use, do not mutate a texture's dimensions, format, or type in
+  place. Create the replacement, swap it at a safe boundary, and dispose the
+  old texture when its final owner releases it.
+- Load runtime KTX2 through `KTX2Loader`. Treat a raw `.basis` file as an
+  authoring/intermediate artifact to package as KTX2, not as a directly
+  supported Three.js runtime texture.
 - Prefer small shared procedural patterns, trim sheets, decals, and atlases over
   unique large textures for repeated props.
 - Preserve dimensions and aspect ratios; do not infer missing maps.
 - Avoid data URIs for meaningful assets when a stable project file is clearer.
+
+Use the complete, compile-checked `copyTextureSamplingState()` replacement
+recipe in `materials-textures.md`. Do not keep a shorter local copy: partial
+recipes commonly lose wrapping, filtering, anisotropy, mapping,
+compare/channel, or UV-matrix state. Set the new source's color-space and
+orientation metadata first, apply that helper only when the semantic role and
+UV contract are unchanged, swap at a safe boundary, then release the previous
+texture through the resource owner.
 
 ## Fonts And UI Art
 

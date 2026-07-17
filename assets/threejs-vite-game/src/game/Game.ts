@@ -16,6 +16,30 @@ import { createSeededRandom } from '../utils/random';
 const ARENA: ArenaBounds = { halfWidth: 11, halfDepth: 7 };
 const TIME_LIMIT_SECONDS = 42;
 const PLAYER_RADIUS = 0.55;
+const ENABLE_GAME_DIAGNOSTICS =
+  import.meta.env.DEV ||
+  import.meta.env.VITE_ENABLE_GAME_DIAGNOSTICS === 'true';
+
+function getToneMappingName(toneMapping: THREE.ToneMapping): string {
+  switch (toneMapping) {
+    case THREE.NoToneMapping:
+      return 'NoToneMapping';
+    case THREE.LinearToneMapping:
+      return 'LinearToneMapping';
+    case THREE.ReinhardToneMapping:
+      return 'ReinhardToneMapping';
+    case THREE.CineonToneMapping:
+      return 'CineonToneMapping';
+    case THREE.ACESFilmicToneMapping:
+      return 'ACESFilmicToneMapping';
+    case THREE.CustomToneMapping:
+      return 'CustomToneMapping';
+    case THREE.AgXToneMapping:
+      return 'AgXToneMapping';
+    case THREE.NeutralToneMapping:
+      return 'NeutralToneMapping';
+  }
+}
 
 export class Game {
   private readonly renderer: THREE.WebGLRenderer;
@@ -38,7 +62,7 @@ export class Game {
     exposure: 1.05,
     maxDpr: 1.5,
   };
-  private readonly debugTools: DebugTools;
+  private readonly debugTools: DebugTools | null;
   private readonly sun = new THREE.DirectionalLight('#fff1bf', 2.6);
   private readonly arena: THREE.Group;
   private readonly rendererStatus = document.createElement('section');
@@ -52,6 +76,7 @@ export class Game {
   private reducedMotion = false;
   private contextLost = false;
   private resumeAfterContextRestore = false;
+  private readonly publishDiagnostics: (() => void) | null;
 
   private readonly onContextLost = (event: Event) => {
     event.preventDefault();
@@ -101,15 +126,135 @@ export class Game {
       this.getElement<HTMLButtonElement>('#retry-button'),
     );
     this.audio.bindMuteButton(this.getElement<HTMLButtonElement>('#mute-button'));
-    this.debugTools = new DebugTools(this.tuning, () => {
-      this.renderer.toneMappingExposure = this.tuning.exposure;
-      resizeRenderer(this.renderer, this.camera, this.tuning.maxDpr);
-    });
+    this.debugTools = ENABLE_GAME_DIAGNOSTICS
+      ? new DebugTools(this.tuning, () => {
+          this.renderer.toneMappingExposure = this.tuning.exposure;
+          resizeRenderer(this.renderer, this.camera, this.tuning.maxDpr);
+        })
+      : null;
 
     this.arena = this.createScene();
     this.resetRun();
     resizeRenderer(this.renderer, this.camera, this.tuning.maxDpr);
-    this.installTestHooks();
+    if (ENABLE_GAME_DIAGNOSTICS) {
+      const initialInfo = this.renderer.info;
+      const dpr = this.renderer.getPixelRatio();
+      const diagnostics: ThreeGameDiagnostics = {
+        frame: this.frame,
+        elapsed: this.elapsed,
+        timeRemaining: Math.max(0, TIME_LIMIT_SECONDS - this.elapsed),
+        state: this.state,
+        score: this.score,
+        targetScore: this.pickups.length,
+        complete: this.state === 'won',
+        hazards: this.hazards.length,
+        player: {
+          position: {
+            x: this.player.group.position.x,
+            y: this.player.group.position.y,
+            z: this.player.group.position.z,
+          },
+          speed: this.player.velocity.length(),
+        },
+        renderer: {
+          revision: THREE.REVISION,
+          type: 'WebGLRenderer',
+          backend: 'webgl',
+          toneMapping: getToneMappingName(this.renderer.toneMapping),
+          toneMappingExposure: this.renderer.toneMappingExposure,
+          calls: initialInfo.render.calls,
+          triangles: initialInfo.render.triangles,
+          geometries: initialInfo.memory.geometries,
+          textures: initialInfo.memory.textures,
+          dpr,
+        },
+        camera: {
+          aspect: this.camera.aspect,
+        },
+        canvas: {
+          clientWidth: this.canvas.clientWidth,
+          clientHeight: this.canvas.clientHeight,
+          width: this.canvas.width,
+          height: this.canvas.height,
+          dpr,
+        },
+      };
+      window.__THREE_GAME_DIAGNOSTICS__ = diagnostics;
+
+      this.publishDiagnostics = () => {
+        // WebGLRenderer replaces `renderer.info` after context restoration;
+        // resolve it per frame instead of retaining a stale pre-loss object.
+        const info = this.renderer.info;
+        const currentDpr = this.renderer.getPixelRatio();
+        diagnostics.frame = this.frame;
+        diagnostics.elapsed = this.elapsed;
+        diagnostics.timeRemaining = Math.max(0, TIME_LIMIT_SECONDS - this.elapsed);
+        diagnostics.state = this.state;
+        diagnostics.score = this.score;
+        diagnostics.targetScore = this.pickups.length;
+        diagnostics.complete = this.state === 'won';
+        diagnostics.hazards = this.hazards.length;
+        diagnostics.player.position.x = this.player.group.position.x;
+        diagnostics.player.position.y = this.player.group.position.y;
+        diagnostics.player.position.z = this.player.group.position.z;
+        diagnostics.player.speed = this.player.velocity.length();
+        diagnostics.renderer.toneMapping = getToneMappingName(this.renderer.toneMapping);
+        diagnostics.renderer.toneMappingExposure = this.renderer.toneMappingExposure;
+        diagnostics.renderer.calls = info.render.calls;
+        diagnostics.renderer.triangles = info.render.triangles;
+        diagnostics.renderer.geometries = info.memory.geometries;
+        diagnostics.renderer.textures = info.memory.textures;
+        diagnostics.renderer.dpr = currentDpr;
+        diagnostics.camera.aspect = this.camera.aspect;
+        diagnostics.canvas.clientWidth = this.canvas.clientWidth;
+        diagnostics.canvas.clientHeight = this.canvas.clientHeight;
+        diagnostics.canvas.width = this.canvas.width;
+        diagnostics.canvas.height = this.canvas.height;
+        diagnostics.canvas.dpr = currentDpr;
+      };
+
+      window.__THREE_GAME_TEST_HOOKS__ = {
+        seed: (value: number) => {
+          this.rng = createSeededRandom(value);
+          return true;
+        },
+        setState: (name: string) => {
+          if (name === 'active-play') this.resetRun();
+          else if (name === 'complete') {
+            this.resetRun();
+            for (const pickup of this.pickups) pickup.collect();
+            this.score = this.pickups.length;
+            this.state = 'won';
+            this.syncHud();
+          } else if (name === 'failed') {
+            this.resetRun();
+            this.elapsed = TIME_LIMIT_SECONDS;
+            this.state = 'lost';
+            this.syncHud();
+          } else if (name === 'paused') {
+            this.resetRun();
+            this.state = 'paused';
+            this.syncHud();
+          } else {
+            console.warn(`Unknown test state: ${name}`);
+            return false;
+          }
+          return true;
+        },
+        setPausedForScreenshot: (paused: boolean) => {
+          this.pausedForScreenshot = paused;
+          if (paused) this.holdPresentation();
+        },
+        setReducedMotion: (enabled: boolean) => {
+          this.reducedMotion = enabled;
+        },
+        hideDebugUi: (hidden: boolean) => {
+          this.debugTools?.setHidden(hidden);
+        },
+      };
+    } else {
+      this.publishDiagnostics = null;
+    }
     document.querySelector('#app')?.append(this.rendererStatus);
     canvas.addEventListener('webglcontextlost', this.onContextLost);
     canvas.addEventListener('webglcontextrestored', this.onContextRestored);
@@ -126,15 +271,17 @@ export class Game {
     this.loop.dispose();
     this.input.dispose();
     this.audio.dispose();
-    this.debugTools.dispose();
+    this.debugTools?.dispose();
     for (const hazard of this.hazards) hazard.dispose();
     for (const pickup of this.pickups) pickup.dispose();
     this.player.dispose();
     disposeObject3D(this.arena);
     this.sun.dispose();
     this.renderer.dispose();
-    window.__THREE_GAME_DIAGNOSTICS__ = undefined;
-    window.__THREE_GAME_TEST_HOOKS__ = undefined;
+    if (ENABLE_GAME_DIAGNOSTICS) {
+      delete window.__THREE_GAME_DIAGNOSTICS__;
+      delete window.__THREE_GAME_TEST_HOOKS__;
+    }
   }
 
   private update(delta: number): boolean {
@@ -195,7 +342,7 @@ export class Game {
     this.cameraRig.present(alpha);
     resizeRenderer(this.renderer, this.camera, this.tuning.maxDpr);
     this.renderer.render(this.scene, this.camera);
-    this.publishDiagnostics();
+    if (ENABLE_GAME_DIAGNOSTICS) this.publishDiagnostics?.();
   }
 
   private createScene(): THREE.Group {
@@ -327,33 +474,6 @@ export class Game {
     return texture;
   }
 
-  private installTestHooks(): void {
-    window.__THREE_GAME_TEST_HOOKS__ = {
-      seed: (value: number) => {
-        this.rng = createSeededRandom(value);
-      },
-      setState: (name: string) => {
-        if (name === 'active-play') this.resetRun();
-        else if (name === 'complete') this.completeRun();
-        else if (name === 'failed') this.failRun();
-        else if (name === 'paused') {
-          this.resetRun();
-          this.state = 'paused';
-          this.syncHud();
-        } else console.warn(`Unknown test state: ${name}`);
-      },
-      setPausedForScreenshot: (paused: boolean) => {
-        this.pausedForScreenshot = paused;
-      },
-      setReducedMotion: (enabled: boolean) => {
-        this.reducedMotion = enabled;
-      },
-      hideDebugUi: (hidden: boolean) => {
-        this.debugTools.setHidden(hidden);
-      },
-    };
-  }
-
   private resetRun(): void {
     this.score = 0;
     this.elapsed = 0;
@@ -364,6 +484,9 @@ export class Game {
     }
     for (const hazard of this.hazards) hazard.reset();
     this.cameraRig.snapTo(this.player.group.position);
+    // A restart/teleport is a presentation discontinuity. Collapse every
+    // interpolation pair so any render alpha displays the authoritative pose.
+    this.holdPresentation();
     this.syncHud();
   }
 
@@ -374,75 +497,8 @@ export class Game {
     this.cameraRig.holdPresentation();
   }
 
-  private completeRun(): void {
-    this.resetRun();
-    for (const pickup of this.pickups) pickup.collect();
-    this.score = this.pickups.length;
-    this.state = 'won';
-    this.syncHud();
-  }
-
-  private failRun(): void {
-    this.resetRun();
-    this.elapsed = TIME_LIMIT_SECONDS;
-    this.state = 'lost';
-    this.syncHud();
-  }
-
   private syncHud(): void {
     this.hud.update(this.score, this.pickups.length, this.elapsed, TIME_LIMIT_SECONDS, this.state);
-  }
-
-  private publishDiagnostics(): void {
-    const info = this.renderer.info;
-    const dpr = this.renderer.getPixelRatio();
-    const toneMappingName =
-      Object.entries(THREE)
-        .find(
-          ([key, value]) =>
-            key.endsWith('ToneMapping') && value === this.renderer.toneMapping,
-        )?.[0] ?? String(this.renderer.toneMapping);
-
-    window.__THREE_GAME_DIAGNOSTICS__ = {
-      frame: this.frame,
-      elapsed: this.elapsed,
-      timeRemaining: Math.max(0, TIME_LIMIT_SECONDS - this.elapsed),
-      state: this.state,
-      score: this.score,
-      targetScore: this.pickups.length,
-      complete: this.state === 'won',
-      hazards: this.hazards.length,
-      player: {
-        position: {
-          x: this.player.group.position.x,
-          y: this.player.group.position.y,
-          z: this.player.group.position.z,
-        },
-        speed: this.player.velocity.length(),
-      },
-      renderer: {
-        revision: THREE.REVISION,
-        type: this.renderer.constructor.name,
-        backend: 'webgl',
-        toneMapping: toneMappingName,
-        toneMappingExposure: this.renderer.toneMappingExposure,
-        calls: info.render.calls,
-        triangles: info.render.triangles,
-        geometries: info.memory.geometries,
-        textures: info.memory.textures,
-        dpr,
-      },
-      camera: {
-        aspect: this.camera.aspect,
-      },
-      canvas: {
-        clientWidth: this.canvas.clientWidth,
-        clientHeight: this.canvas.clientHeight,
-        width: this.canvas.width,
-        height: this.canvas.height,
-        dpr,
-      },
-    };
   }
 
   private getElement<T extends HTMLElement = HTMLElement>(selector: string): T {

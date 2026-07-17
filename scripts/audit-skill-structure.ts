@@ -47,9 +47,11 @@ const NAMED_SKILL_INVOCATION =
 
 const STALE_TYPESCRIPT_APIS: ReadonlyArray<readonly [string, RegExp]> = [
   ["deprecated THREE.Clock timing", /\bTHREE\.Clock\b|\bnew\s+Clock\s*\(/],
-  ["manual requestAnimationFrame loop", /\b(?:window\.)?requestAnimationFrame\s*\(/],
-  ["manual cancelAnimationFrame loop", /\b(?:window\.)?cancelAnimationFrame\s*\(/],
   ["removed renderer.outputEncoding", /\.outputEncoding\b/],
+  [
+    "removed Texture.encoding; use colorSpace",
+    /\b(?:texture|map|[A-Za-z_$][\w$]*(?:Texture|Map))\.encoding\b/i,
+  ],
   ["removed color encoding constant", /\b(?:sRGBEncoding|LinearEncoding|GammaEncoding)\b/],
   ["removed renderer gamma setting", /\.(?:gammaOutput|gammaFactor)\b/],
   ["stale physical-light compatibility setting", /\.(?:physicallyCorrectLights|useLegacyLights)\b/],
@@ -67,7 +69,7 @@ const STALE_TYPESCRIPT_APIS: ReadonlyArray<readonly [string, RegExp]> = [
   ["deprecated renderer or pipeline renderAsync", /\.renderAsync\s*\(/],
   ["deprecated async renderer clear method", /\.(?:clear|clearColor|clearDepth|clearStencil)Async\s*\(/],
   ["deprecated async renderer capability or texture method", /\.(?:hasFeature|initTexture)Async\s*\(/],
-  ["deprecated WebGPURenderer.waitForGPU", /\.waitForGPU\s*\(/],
+  ["removed WebGPURenderer.waitForGPU", /\.waitForGPU\s*\(/],
   ["deprecated KTX2Loader.detectSupportAsync", /\.detectSupportAsync\s*\(/],
   ["deprecated DRACOLoader.setDecoderConfig", /\.setDecoderConfig\s*\(/],
   ["removed PointerLockControls.getObject", /\.getObject\s*\(/],
@@ -78,7 +80,10 @@ const STALE_TYPESCRIPT_APIS: ReadonlyArray<readonly [string, RegExp]> = [
   ],
   ["deprecated PMREM async conversion method", /\.(?:fromScene|fromEquirectangular|fromCubemap)Async\s*\(/],
   ["deprecated SVGLoader.createShapes", /\bSVGLoader\.createShapes\s*\(/],
-  ["removed or legacy web loader", /\b(?:USDZLoader|VTKLoader|LWOLoader|LottieLoader)\b/],
+  ["USDZLoader rename is pending in untagged 185→186 migration guidance", /\bUSDZLoader\b/],
+  ["deprecated VTKLoader (present in r185; pending next-revision removal guidance)", /\bVTKLoader\b/],
+  ["deprecated LWOLoader (present in r185; pending next-revision removal guidance)", /\bLWOLoader\b/],
+  ["deprecated LottieLoader (pending next-revision removal guidance)", /\bLottieLoader\b/],
   ["removed FirstPersonControls.handleResize", /\.handleResize\s*\(/],
   ["removed SceneUtils attach or detach helper", /\bSceneUtils\.(?:attach|detach)\s*\(/],
   ["removed legacy math predicate alias", /\.(?:empty|isIntersectionBox|isIntersectionPlane|isIntersectionSphere|isIntersectionLine)\s*\(/],
@@ -115,6 +120,9 @@ const ROOT_ABSOLUTE_ASSET_URL =
 const RAW_STALE_EXECUTABLE_CONTENT: ReadonlyArray<readonly [string, RegExp]> = [
   ["deprecated GLSL inverseTransformDirection helper", /\binverseTransformDirection\b/],
 ];
+
+const MAX_COORDINATOR_LINES = 500;
+const REFERENCE_CONTENTS_THRESHOLD = 100;
 
 export interface Finding {
   path: string;
@@ -395,6 +403,44 @@ function auditMarkdownLinks(root: string): Finding[] {
           excerpt: target.slice(0, 180),
         });
       }
+    }
+  }
+  return findings;
+}
+
+function auditProgressiveDisclosure(root: string): Finding[] {
+  const findings: Finding[] = [];
+  const skillPath = join(root, "SKILL.md");
+  const skill = safeRead(skillPath, root);
+  findings.push(...skill.findings);
+  if (skill.text !== undefined) {
+    const lineCount = linesWithEndings(skill.text).length;
+    if (lineCount > MAX_COORDINATOR_LINES) {
+      findings.push({
+        path: "SKILL.md",
+        line: MAX_COORDINATOR_LINES + 1,
+        reason: "root coordinator exceeds the progressive-disclosure line budget",
+        excerpt: `${lineCount} lines; move task-specific detail into directly linked references`,
+      });
+    }
+  }
+
+  const referencesRoot = join(root, "references");
+  for (const path of walkFiles(referencesRoot).filter((file) => extname(file) === ".md")) {
+    const result = safeRead(path, root);
+    findings.push(...result.findings);
+    if (result.text === undefined) continue;
+    const lines = linesWithEndings(result.text);
+    if (
+      lines.length > REFERENCE_CONTENTS_THRESHOLD
+      && !/^## Contents[ \t]*$/m.test(lines.slice(0, 30).join(""))
+    ) {
+      findings.push({
+        path: relativePath(root, path),
+        line: 1,
+        reason: "long reference is missing a top-level contents map",
+        excerpt: `${lines.length} lines; add a concise ## Contents section near the top`,
+      });
     }
   }
   return findings;
@@ -776,16 +822,142 @@ function jsonErrorLine(text: string, error: unknown): number {
   return line === undefined ? 1 : Number.parseInt(line, 10);
 }
 
-/** Minimum modern floor: r185 / 0.185.x. Accepts exact, caret, tilde, or >= ranges. */
+type VersionBound = { version: readonly [number, number, number]; inclusive: boolean };
+
+function compareVersion(
+  left: readonly [number, number, number],
+  right: readonly [number, number, number],
+): number {
+  for (let index = 0; index < 3; index += 1) {
+    const difference = left[index]! - right[index]!;
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function strongerLower(current: VersionBound | null, candidate: VersionBound): VersionBound {
+  if (!current) return candidate;
+  const relation = compareVersion(candidate.version, current.version);
+  if (relation > 0) return candidate;
+  if (relation < 0) return current;
+  // At an equal lower bound, `>` is stronger than `>=`.
+  return !candidate.inclusive && current.inclusive ? candidate : current;
+}
+
+function strongerUpper(current: VersionBound | null, candidate: VersionBound): VersionBound {
+  if (!current) return candidate;
+  const relation = compareVersion(candidate.version, current.version);
+  if (relation < 0) return candidate;
+  if (relation > 0) return current;
+  // At an equal upper bound, `<` is stronger than `<=`.
+  return !candidate.inclusive && current.inclusive ? candidate : current;
+}
+
+interface PartialVersion {
+  version: readonly [number, number, number];
+  complete: boolean;
+}
+
+const VERSION_LITERAL_SOURCE = "0\\.\\d+(?:\\.(?:\\d+|[xX*]))?";
+
+function parsePartialVersion(value: string): PartialVersion | null {
+  const match = /^0\.(\d+)(?:\.(\d+|[xX*]))?$/.exec(value);
+  if (!match) return null;
+  const patchValue = match[2];
+  const complete = patchValue !== undefined && !/^[xX*]$/.test(patchValue);
+  return {
+    version: [
+      0,
+      Number.parseInt(match[1]!, 10),
+      complete ? Number.parseInt(patchValue!, 10) : 0,
+    ],
+    complete,
+  };
+}
+
+function nextMinor(version: readonly [number, number, number]): readonly [number, number, number] {
+  return [0, version[1] + 1, 0];
+}
+
+function branchHasModernFloor(branch: string): boolean {
+  let lower: VersionBound | null = null;
+  let upper: VersionBound | null = null;
+
+  const hyphen = new RegExp(
+    `^\\s*(${VERSION_LITERAL_SOURCE})\\s+-\\s+(${VERSION_LITERAL_SOURCE})\\s*$`,
+  ).exec(branch);
+  if (hyphen) {
+    const start = parsePartialVersion(hyphen[1]!);
+    const end = parsePartialVersion(hyphen[2]!);
+    if (!start || !end) return false;
+    lower = { version: start.version, inclusive: true };
+    upper = end.complete
+      ? { version: end.version, inclusive: true }
+      : { version: nextMinor(end.version), inclusive: false };
+  } else {
+    const token = new RegExp(
+      `(\\^|~|>=|<=|>|<|=)?\\s*(${VERSION_LITERAL_SOURCE})`,
+      "g",
+    );
+    let cursor = 0;
+    let count = 0;
+    for (const match of branch.matchAll(token)) {
+      const gap = branch.slice(cursor, match.index);
+      if (gap.trim() || (count > 0 && gap.length === 0)) return false;
+      cursor = match.index + match[0].length;
+      count += 1;
+
+      const operator = match[1] ?? "";
+      const parsed = parsePartialVersion(match[2]!);
+      if (!parsed) return false;
+      const version = parsed.version;
+      const followingMinor = nextMinor(version);
+
+      if (operator === "<") {
+        upper = strongerUpper(upper, { version, inclusive: false });
+      } else if (operator === "<=") {
+        upper = strongerUpper(
+          upper,
+          parsed.complete
+            ? { version, inclusive: true }
+            : { version: followingMinor, inclusive: false },
+        );
+      } else if (operator === ">") {
+        lower = strongerLower(
+          lower,
+          parsed.complete
+            ? { version, inclusive: false }
+            : { version: followingMinor, inclusive: true },
+        );
+      } else if (operator === ">=") {
+        lower = strongerLower(lower, { version, inclusive: true });
+      } else if (operator === "^" || operator === "~" || !parsed.complete) {
+        lower = strongerLower(lower, { version, inclusive: true });
+        upper = strongerUpper(upper, { version: followingMinor, inclusive: false });
+      } else {
+        lower = strongerLower(lower, { version, inclusive: true });
+        upper = strongerUpper(upper, { version, inclusive: true });
+      }
+    }
+    if (count === 0 || branch.slice(cursor).trim()) return false;
+  }
+
+  if (!lower || compareVersion(lower.version, [0, 185, 0]) < 0) return false;
+  if (upper) {
+    const relation = compareVersion(lower.version, upper.version);
+    if (relation > 0 || (relation === 0 && (!lower.inclusive || !upper.inclusive))) return false;
+  }
+  return true;
+}
+
+/** Accept declarations whose every satisfiable branch has stable r185 as its minimum floor. */
 export function isModernThreeRange(specifier: unknown, packageName: string): boolean {
   if (typeof specifier !== "string" || !specifier.trim()) return false;
   const value = specifier.trim();
   // Allow "latest" / "*" only for three itself when agents intentionally track npm.
   if (packageName === "three" && (value === "latest" || value === "*")) return true;
-  const match = /^(?:[\^~>=\s]*)?0\.(1[89]\d|[2-9]\d{2}|\d{4,})\.\d+/.exec(value);
-  if (!match) return false;
-  const minor = Number.parseInt(value.replace(/^[^\d]*/, "").split(".")[1] ?? "0", 10);
-  return minor >= 185;
+  const branches = value.split("||").map((branch) => branch.trim());
+  return branches.length > 0 && branches.every((branch) => branchHasModernFloor(branch));
 }
 
 function auditScaffoldPackage(root: string): Finding[] {
@@ -839,8 +1011,8 @@ function auditScaffoldPackage(root: string): Finding[] {
       findings.push({
         path: relativeName,
         line: packageLine(text, packageName),
-        reason: "Three.js scaffold dependency must admit r185 or newer",
-        excerpt: `${section}.${packageName}: expected open r185+ range (e.g. '^0.185.0'), found ${
+        reason: "Three.js scaffold dependency must start at r185 or newer",
+        excerpt: `${section}.${packageName}: expected a supported r185-or-newer declaration (e.g. '^0.185.0'), found ${
           actual === undefined ? "None" : `'${String(actual)}'`
         }`,
       });
@@ -979,6 +1151,7 @@ export function audit(skillRoot: string): Finding[] {
   const skillFiles = auditSkillFiles(root);
   return [
     ...skillFiles.findings,
+    ...auditProgressiveDisclosure(root),
     ...auditMarkdownLinks(root),
     ...auditMarkdownTypescriptExamples(root),
     ...auditCrossSkillReferences(root, skillFiles.skillName),
@@ -1060,7 +1233,7 @@ function auditProductivityPass(root: string): Finding[] {
     }
   }
 
-  for (const scriptName of ["ship-check", "audit:assets"]) {
+  for (const scriptName of ["ship-check", "audit:assets", "audit:official-links"]) {
     if (typeof scripts[scriptName] !== "string") {
       findings.push({
         path: "package.json",
@@ -1076,7 +1249,7 @@ function auditProductivityPass(root: string): Finding[] {
 
 const HELP = `usage: audit-skill-structure.ts [-h] [skill]
 
-Validate one coordinator, local links, self-containment, and the r185 scaffold.
+Validate progressive disclosure, local links, self-containment, and the r185 scaffold.
 
 positional arguments:
   skill       Skill package root. (default: .)
@@ -1121,15 +1294,21 @@ export function main(argv = process.argv.slice(2)): number {
     return 1;
   }
   console.log(
-    "Skill structure audit passed: one coordinator owns every bundled reference; " +
+    "Skill structure audit passed: one concise coordinator owns every bundled reference; " +
+      "long references provide contents maps; " +
       "relative Markdown links resolve; executable examples avoid curated deprecated APIs " +
       "and incompatible renderer stacks; no operational cross-skill references remain; " +
-      "and the scaffold uses TypeScript/npm tooling with an r185+ Three.js range, Timer, " +
+      "and the scaffold uses TypeScript/npm tooling with declarations starting at r185, Timer, " +
       "and animation-loop contracts.",
   );
   return 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+const invokedAsMain = Boolean(
+  process.argv[1] &&
+  existsSync(resolve(process.argv[1])) &&
+  realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)),
+);
+if (invokedAsMain) {
   process.exitCode = main();
 }

@@ -30,7 +30,7 @@ procedural, project-local, user-supplied, deferred]
 ## Three.js and runtime contract
 
 - Three.js revision (installed package and `THREE.REVISION`, for example
-  `three@<installed> / r<REVISION>` — confirm r185+):
+  `three@<installed> / r<REVISION>` — verify that exact revision):
 - Renderer/backend (`WebGLRenderer`/WebGL or `WebGPURenderer`/WebGPU, including
   any fallback):
 - Documentation/version baseline (official pages/source checked against the
