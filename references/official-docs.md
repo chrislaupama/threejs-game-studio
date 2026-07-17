@@ -1,4 +1,4 @@
-# Official Three.js Baseline
+# Official Three.js Guidance (r185+)
 
 ## Contents
 
@@ -6,7 +6,8 @@
 - Local-first installation and imports
 - Official source map
 - Renderer compatibility boundary
-- r185.1 stale-API denylist
+- WebGPU alpha and tone-mapping defaults
+- Modern stale-API denylist (r185+)
 - Stable-versus-next-release watchlist
 - Documentation and example verification procedure
 
@@ -16,9 +17,10 @@ matching release tag as the implementation contract.
 
 ## Version And Source Policy
 
-Target **`three@0.185.1` (r185)** for this reference set. Pin that exact package
-version in greenfield work. Preserve an existing project's locked version
-unless an upgrade is part of the request; read every intervening section of the
+**Supports Three.js r185 and onwards.** Greenfield installs use current npm
+latest (`npm install three` / `three@latest`). Preserve an existing project's
+locked version unless an upgrade is part of the request; read every intervening
+section of the
 [official migration guide](https://github.com/mrdoob/three.js/wiki/Migration-Guide)
 before changing it.
 
@@ -28,34 +30,38 @@ Use this authority order when sources disagree:
    runtime source, and TypeScript declarations. When they conflict, installed
    runtime exports/source win for existence and behavior; declarations remain
    compile-contract evidence and the mismatch must be documented.
-2. Inspect the matching [r185 source tag](https://github.com/mrdoob/three.js/tree/r185)
-   and its examples for implementation-sensitive behavior.
+2. Inspect the matching source tag (for example
+   [r185](https://github.com/mrdoob/three.js/tree/r185) or the installed
+   revision's tag) and its examples for implementation-sensitive behavior.
 3. Use the [live API docs](https://threejs.org/docs/) and
    [manual](https://threejs.org/manual/) for current intent and concepts.
 4. Use official examples as executable patterns, then adapt them to local
    modules, ownership, resize, failure, and teardown.
 5. Use the migration guide to identify removals, renames, and semantic changes.
 
-The live site can move ahead of a pinned release. Never copy a live example
-blindly into an older project. Confirm every addon path, constructor, property,
-and return value against the installed version.
+Some live doc examples still show deprecated APIs. The installed package and the
+denylist below win over stale examples.
 
-At discovery, compare `npm view three version` with `0.185.1`. If stable has
-advanced, do not silently treat these recipes as newly verified. A reproducible
-tutorial may stay on the exact tested baseline and disclose that choice. A
-request for the newest stable must pin the newer version, read the intervening
-migration entries, re-check source/types and every imported addon, then rerun
-build, renderer-backend, asset, browser, and teardown verification. Record both
-the installed target and this reference set's baseline in the report.
+**Last verified against (informational, not a pin):** npm `three@0.185.1`
+(REVISION `185`), 2026-07-17. When npm or live docs move past that check, re-run
+`npm ls three`, `THREE.REVISION`, and `npm view three version`, then reconcile
+via the migration guide before treating skill recipes as current.
+
+At discovery, compare `npm view three version` with the installed revision. If
+stable has advanced, do not silently treat these recipes as newly verified.
+Record both the installed target and any skill last-check note in the report.
 
 ## Local-First Installation And Imports
 
 Install dependencies at build time and serve all game code and assets locally:
 
 ```bash
-npm install three@0.185.1
-npm install --save-dev @types/three@0.185.1 vite typescript
+npm install three
+npm install --save-dev @types/three vite typescript
 ```
+
+Confirm `THREE.REVISION` is at least `185`. Open ranges such as `^0.185.0` are
+fine for scaffolds; prefer current latest when starting greenfield work.
 
 Use ES modules and the package export map:
 
@@ -145,6 +151,12 @@ citations, not runtime dependencies.
 - [RenderPipeline](https://threejs.org/docs/pages/RenderPipeline.html)
 - [RenderOutputNode](https://threejs.org/docs/pages/RenderOutputNode.html)
 
+### Overlays And Helpers
+
+- [CSS2DRenderer](https://threejs.org/docs/pages/CSS2DRenderer.html)
+- [CSS3DRenderer](https://threejs.org/docs/pages/CSS3DRenderer.html)
+- [TransformControls](https://threejs.org/docs/pages/TransformControls.html)
+
 ### WebXR
 
 - [WebXR basics](https://threejs.org/manual/en/webxr-basics.html)
@@ -166,13 +178,14 @@ Choose the renderer before choosing custom-material or post-processing APIs.
 | Post-processing | `EffectComposer` and addon passes | `RenderPipeline` and TSL nodes |
 | Initialization | Synchronous | Use `setAnimationLoop()` or `await renderer.init()` |
 
-r185 also exposes a deliberately limited migration bridge on the separate
-`WebGLRenderer` path: install `WebGLNodesHandler` with `setNodesHandler()` for
-supported node materials, and use `setEffects()` for supported effects. This
-does not add `RenderPipeline` support to `WebGLRenderer`, does not relax the
-WebGPURenderer restrictions, and must be checked feature-by-feature. See the
-current [WebGLRenderer API](https://threejs.org/docs/pages/WebGLRenderer.html)
-and `rendering.md` for the exact setup.
+Modern releases also expose a deliberately limited migration bridge on the
+separate `WebGLRenderer` path: install `WebGLNodesHandler` with
+`setNodesHandler()` for supported node materials, and use `setEffects()` for
+supported effects. This does not add `RenderPipeline` support to
+`WebGLRenderer`, does not relax the WebGPURenderer restrictions, and must be
+checked feature-by-feature. See the current
+[WebGLRenderer API](https://threejs.org/docs/pages/WebGLRenderer.html) and
+`rendering.md` for the exact setup.
 
 Default to `WebGLRenderer` for compatibility with existing GLSL, addons, broad
 production history, and uncomplicated beginner work. For a graphics-heavy or
@@ -193,12 +206,48 @@ backend after `await renderer.init()`.
 Do not combine imports or recipes from both columns in one renderer path except
 for that documented WebGL-only migration bridge.
 
-## r185.1 Stale-API Denylist
+## WebGPU Alpha And Tone-Mapping Defaults
+
+`WebGPURenderer` documentation historically defaults `alpha: true`. Games should
+override to opaque unless HTML compositing is required:
+
+```ts
+import * as THREE from 'three/webgpu';
+
+const renderer = new THREE.WebGPURenderer({
+  canvas,
+  antialias: true,
+  alpha: false,
+});
+renderer.setClearColor(0x0b1020, 1);
+scene.background = new THREE.Color(0x0b1020);
+
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1;
+```
+
+Premultiplied-alpha compositing (r184→185 and onwards) is easy to get wrong when
+the canvas is transparent over a page background. Prefer opaque `alpha: false`
+plus an opaque `Scene.background` / `setClearColor` for full-viewport games.
+
+Tone mapping: choose intentional `ACESFilmicToneMapping`, `AgXToneMapping`, or
+`NeutralToneMapping` for lit PBR. Do not leave games on default `NoToneMapping`
+without a reason. See `tone-mapping-color.md`.
+
+SVG shapes: prefer `shapePath.toShapes()` over the deprecated
+`SVGLoader.createShapes()` helper. Some live doc examples may still show the
+plural migration-wiki wording; installed source and this denylist are more
+precise.
+
+## Modern Stale-API Denylist (r185+)
 
 Reject or rewrite these patterns during planning, implementation, and review.
-Confirm the changes against the [migration guide](https://github.com/mrdoob/three.js/wiki/Migration-Guide).
+Confirm the changes against the [migration guide](https://github.com/mrdoob/three.js/wiki/Migration-Guide)
+and the installed revision. Prefer current names; do not treat this table as
+locked to a single patch string.
 
-| Reject | Use in r185.1 |
+| Reject | Use (modern / r185+) |
 | --- | --- |
 | Global `THREE` scripts, `examples/js/*`, `build/three.js`, `three.min.js` | ES modules from `three`, `three/webgpu`, `three/tsl`, and `three/addons/*` |
 | WebGL 1 compatibility code | WebGL 2 through `WebGLRenderer` |
@@ -216,7 +265,7 @@ Confirm the changes against the [migration guide](https://github.com/mrdoob/thre
 | WebGPU `EffectComposer` | `RenderPipeline` |
 | WebGPU `PostProcessing` wrapper | `RenderPipeline`; the wrapper is deprecated since r183 |
 | `Renderer.renderAsync()`, async clear methods, `hasFeatureAsync()`, or `initTextureAsync()` | Initialize once, then use `render()`, `clear()`, `hasFeature()`, or `initTexture()` |
-| Treating every async Renderer method as deprecated | `computeAsync()`, `compileAsync()`, readback methods, and `resolveTimestampsAsync()` remain current in r185.1; verify each method individually |
+| Treating every async Renderer method as deprecated | `computeAsync()`, `compileAsync()`, readback methods, and `resolveTimestampsAsync()` remain current; verify each method individually against the installed revision |
 | `WebGPURenderer.waitForGPU()` | Remove; profile with browser GPU tools and current renderer APIs |
 | `RenderPipeline.renderAsync()` or `QuadMesh.renderAsync()` | Initialize the renderer, then use `render()` |
 | `KTX2Loader.detectSupportAsync()` | Initialize the renderer, then call `detectSupport(renderer)` |
@@ -254,7 +303,7 @@ Confirm the changes against the [migration guide](https://github.com/mrdoob/thre
 | `ColorManagement.fromWorkingColorSpace()` / `toWorkingColorSpace()` | `workingToColorSpace()` / `colorSpaceToWorking()` |
 | `Matrix3.scale()` / `rotate()` / `translate()` | `makeScale()` / `makeRotation()` / `makeTranslation()` or explicit matrix composition |
 | `WebGLCubeRenderTarget` with `WebGPURenderer` | `CubeRenderTarget` |
-| `SkyMesh.isSky` | `SkyMesh.isSkyMesh`; the separate legacy `Sky` addon still has a current `isSky` flag in r185 |
+| `SkyMesh.isSky` | `SkyMesh.isSkyMesh`; the separate legacy `Sky` addon still has a current `isSky` flag |
 | Assuming `FileLoader.load()` or `ImageBitmapLoader.load()` returns a request | Use callbacks or supported `loadAsync()` flows |
 | Manual +Z-up correction for every FBX | Inspect first; current `FBXLoader` converts +Z-up files to +Y-up |
 | `Raycaster.firstHitOnly` presented as core | Mark it as third-party acceleration behavior |
@@ -262,24 +311,22 @@ Confirm the changes against the [migration guide](https://github.com/mrdoob/thre
 
 ## Stable Versus Next-Release Watchlist
 
-The migration guide can contain a not-yet-released 185→186 section while npm
-stable remains r185. Do not silently use a future removal as proof that an
-r185.1 symbol is already absent. Keep these entries as upgrade warnings and
-prefer a cross-version replacement only when it is valid in the installed
-release:
+Re-check these when upgrading past the skill's last-verify note. Do not treat a
+future migration entry as proof that a symbol is already absent in the installed
+revision:
 
 - `PCFSoftShadowMap` is already deprecated on the WebGL path and should not be
-  used; the next migration entry removes it from the WebGPU path too. Use
-  `PCFShadowMap` in r185.1.
+  used; later migration entries remove it from the WebGPU path too. Use
+  `PCFShadowMap`.
 - `TiledLighting` is replaced by `ClusteredLighting`; new heavy many-light
   scenes should start with the current clustered addon and measure it.
-- The next migration entry renames `LightProbeGrid` and
+- Later migration entries may rename `LightProbeGrid` /
   `LightProbeGridHelper` on the WebGL side. Do not teach unreleased names as
-  r185.1 imports; re-check when the installed revision changes.
-- The next migration entry makes `SimplifyModifier.modify()` asynchronous.
+  current imports; re-check when the installed revision changes.
+- Later migration entries may make `SimplifyModifier.modify()` asynchronous.
   Treat simplification tooling as version-sensitive and verify its return type
   before integrating it into an asset pipeline.
-- The next migration entry deprecates two `GTAONode` distance controls. Avoid
+- Later migration entries may deprecate some `GTAONode` distance controls. Avoid
   building core tuning UX around them and re-check the installed declaration
   before exposing those properties.
 
@@ -290,8 +337,8 @@ For every version-sensitive recipe:
 1. Read the installed package version and lockfile.
 2. Resolve each import against the package export map; never guess an addon
    path.
-3. Check the matching API page and the r185 source/example when the API is
-   experimental, shader-facing, XR-facing, or recently migrated.
+3. Check the matching API page and the installed revision's source/example when
+   the API is experimental, shader-facing, XR-facing, or recently migrated.
 4. Keep browser runtime URLs project-relative and prove the game runs after
    dependency installation with outbound network disabled.
 5. Run the build/typecheck and open the real local page.

@@ -22,6 +22,18 @@ interface RendererDiagnostics {
   triangles: number;
   geometries: number;
   textures: number;
+  revision?: string;
+  type?: string;
+  backend?: string;
+  toneMapping?: string | number;
+  dpr?: number;
+}
+
+interface RenderBudgetMetrics {
+  calls: number;
+  triangles: number;
+  geometries: number;
+  textures: number;
 }
 
 interface ThreeGameTestHooks {
@@ -30,11 +42,14 @@ interface ThreeGameTestHooks {
 }
 
 interface InspectorGameWindow {
-  __THREE_GAME_DIAGNOSTICS__?: { renderer?: RendererDiagnostics };
+  __THREE_GAME_DIAGNOSTICS__?: {
+    renderer?: RendererDiagnostics;
+    canvas?: { dpr?: number };
+  };
   __THREE_GAME_TEST_HOOKS__?: ThreeGameTestHooks;
 }
 
-const RENDER_BUDGETS: Record<RenderMode, Record<keyof RendererDiagnostics, number>> = {
+const RENDER_BUDGETS: Record<RenderMode, Record<keyof RenderBudgetMetrics, number>> = {
   desktop: { calls: 300, triangles: 750_000, geometries: 300, textures: 60 },
   mobile: { calls: 150, triangles: 300_000, geometries: 200, textures: 40 },
 };
@@ -220,6 +235,7 @@ async function sampleCanvas(page: Page, mode: RenderMode) {
   });
 
   const ok = alphaPixels > 256 && (variance > 8 || colors.size > 3);
+  const renderer = diagnostics.game?.renderer ?? null;
   return {
     ok,
     reason: ok ? 'nonblank' : 'low-variance',
@@ -228,8 +244,15 @@ async function sampleCanvas(page: Page, mode: RenderMode) {
     alphaPixels,
     variance,
     colorBuckets: colors.size,
+    three: {
+      revision: renderer?.revision ?? null,
+      rendererType: renderer?.type ?? null,
+      backend: renderer?.backend ?? null,
+      toneMapping: renderer?.toneMapping ?? null,
+      dpr: renderer?.dpr ?? diagnostics.game?.canvas?.dpr ?? null,
+    },
     metrics: computePixelMetrics(png),
-    renderBudget: checkRenderBudget(diagnostics.game?.renderer ?? null, mode),
+    renderBudget: checkRenderBudget(renderer, mode),
     diagnostics: diagnostics.game,
   };
 }

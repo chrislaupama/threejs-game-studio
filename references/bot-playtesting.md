@@ -59,3 +59,41 @@ does not prove a player-facing conclusion by itself.
 ## Reporting
 
 Include in the QA evidence: the JSON report attachment (steps, frames, score progression, distance, softlock windows, errors), the seed used, and pass/fail per assertion. Report the bot playtest decision like the visual harness decision: added / extended / skipped with reason.
+
+## Richer Playwright Recipe
+
+```ts
+import { test, expect } from '@playwright/test';
+
+test('scripted arena sweep progresses score', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => window.__THREE_GAME_TEST_HOOKS__ !== undefined);
+
+  await page.evaluate(() => {
+    window.__THREE_GAME_TEST_HOOKS__!.seed(42);
+    window.__THREE_GAME_TEST_HOOKS__!.setState('active-play');
+  });
+
+  const before = await page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__!.score);
+
+  // Hold move-forward for a bounded number of animation frames, not wall clock alone.
+  await page.keyboard.down('KeyW');
+  await page.waitForFunction(
+    (start) => (window.__THREE_GAME_DIAGNOSTICS__?.frame ?? 0) >= start + 120,
+    await page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__!.frame),
+  );
+  await page.keyboard.up('KeyW');
+
+  const after = await page.evaluate(() => ({
+    score: window.__THREE_GAME_DIAGNOSTICS__!.score,
+    errors: (window as unknown as { __consoleErrors?: string[] }).__consoleErrors ?? [],
+  }));
+
+  expect(after.errors).toEqual([]);
+  expect(after.score).toBeGreaterThanOrEqual(before);
+});
+```
+
+Add a second "reckless" script that seeks hazards and asserts fail → retry
+restores `playing`. Prefer frame counters from diagnostics over fixed
+`waitForTimeout` for softlock detection.

@@ -10,6 +10,7 @@ export function createRenderer(canvas: HTMLCanvasElement): THREE.WebGLRenderer {
     alpha: false,
     powerPreference: 'high-performance',
   });
+  renderer.setClearColor(0x0b1020, 1);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;

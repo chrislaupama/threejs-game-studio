@@ -111,3 +111,50 @@ Report:
 - Baseline artifact paths.
 - Thresholds/masks and why they are safe.
 - Remaining flake risks.
+
+## Richer Playwright Recipe
+
+```ts
+import { test, expect, devices } from '@playwright/test';
+
+test.describe('visual baselines', () => {
+  test.use({ ...devices['Desktop Chrome'] });
+
+  test('active-play desktop', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForFunction(() => window.__THREE_GAME_TEST_HOOKS__ !== undefined);
+    await page.evaluate(() => {
+      const hooks = window.__THREE_GAME_TEST_HOOKS__!;
+      hooks.seed(7);
+      hooks.setReducedMotion(true);
+      hooks.hideDebugUi(true);
+      hooks.setPausedForScreenshot(true);
+      hooks.setState('active-play');
+    });
+    await expect(page.locator('canvas')).toHaveScreenshot('active-play-desktop.png', {
+      maxDiffPixelRatio: 0.02,
+      animations: 'disabled',
+    });
+  });
+});
+
+test.describe('mobile active-play', () => {
+  test.use({ ...devices['iPhone 13'] });
+
+  test('active-play mobile', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForFunction(() => window.__THREE_GAME_TEST_HOOKS__ !== undefined);
+    await page.evaluate(() => {
+      window.__THREE_GAME_TEST_HOOKS__!.seed(7);
+      window.__THREE_GAME_TEST_HOOKS__!.setReducedMotion(true);
+      window.__THREE_GAME_TEST_HOOKS__!.setState('active-play');
+    });
+    await expect(page.locator('canvas')).toHaveScreenshot('active-play-mobile.png', {
+      maxDiffPixelRatio: 0.03,
+    });
+  });
+});
+```
+
+Store baselines under the Playwright snapshot directory. Re-record only after
+intentional art or layout changes; never raise thresholds to hide flakes.

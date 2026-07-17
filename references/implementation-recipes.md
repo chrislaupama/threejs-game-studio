@@ -447,6 +447,46 @@ thin targets. Call `projectilePool.present(alpha)` once from
 `presentInterpolatedState()` after the fixed-step loop; gameplay collision reads
 `position`, never the interpolated mesh position. Use collision proxies, not
 render triangles. Decide whether pool exhaustion rejects the spawn, recycles
+the oldest projectile, or expands the pool only in development.
+
+### Pickup / VFX event bus
+
+Keep collectibles and presentation effects out of each other's ownership. Emit
+gameplay events; let a single VFX owner react (see `vfx.md`):
+
+```ts
+type GameEvent =
+  | { type: 'pickup-collected'; id: string; position: THREE.Vector3; value: number }
+  | { type: 'player-hit'; position: THREE.Vector3; intensity: number };
+
+class EventBus {
+  private readonly listeners = new Map<string, Set<(event: GameEvent) => void>>();
+
+  on(type: GameEvent['type'], fn: (event: GameEvent) => void): () => void {
+    const set = this.listeners.get(type) ?? new Set();
+    set.add(fn);
+    this.listeners.set(type, set);
+    return () => set.delete(fn);
+  }
+
+  emit(event: GameEvent): void {
+    for (const fn of this.listeners.get(event.type) ?? []) fn(event);
+  }
+}
+
+// Gameplay
+bus.emit({ type: 'pickup-collected', id, position: pickup.position.clone(), value: 1 });
+
+// Presentation (one subscriber)
+bus.on('pickup-collected', (event) => {
+  if (event.type !== 'pickup-collected') return;
+  vfx.emit({ type: 'pickup', position: event.position });
+  audio.play('pickup', { position: event.position });
+});
+```
+
+Do not spawn meshes or particles inside the pickup collision handler beyond
+updating authoritative score/state.
 the oldest, or grows only at a safe transition; never allocate unpredictably
 during peak combat.
 

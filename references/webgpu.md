@@ -2,7 +2,7 @@
 
 ## Contents
 
-- Stable r185.1 contract and product status
+- Modern r185+ contract and product status
 - Heavy-3D renderer decision
 - Renderer family and fallback boundaries
 - TypeScript boot, backend reporting, resize, and teardown
@@ -21,9 +21,10 @@ and `webxr.md` when XR is in scope.
 Asset-loading examples use the project-owned `publicAssetUrl()` helper from
 `local-assets.md`; import it from the local asset boundary in real code.
 
-## Stable Contract And Status
+## Modern Contract And Status
 
-This reference targets **`three@0.185.1` (r185)**. The official
+This reference supports **Three.js r185 and onwards**. Prefer the project's
+installed revision and live docs over any frozen patch string. The official
 [WebGPURenderer guide](https://threejs.org/manual/en/webgpurenderer) calls
 `WebGPURenderer` the next-generation alternative to `WebGLRenderer`, with a
 WebGPU backend and automatic WebGL 2 fallback. It also explicitly says the
@@ -275,6 +276,7 @@ const renderer = new THREE.WebGPURenderer({
   canvas,
   antialias: true,
   forceWebGL: true,
+  alpha: false,
 });
 await renderer.init();
 ```
@@ -420,7 +422,7 @@ integrator's limits and avoids a large hidden-tab step. A fixed compute cadence
 is preferable when repeatability matters. Stop the animation loop and dispose
 the `Timer`, geometry, node material, and storage owners during teardown.
 
-`computeAsync()` remains a current r185.1 method. Prefer `compute()` after
+`computeAsync()` remains a current method on modern revisions. Prefer `compute()` after
 explicit initialization for the ordinary frame loop; use async APIs only when
 their actual promise/readback semantics are needed. Do not repeat the migration
 guide's ambiguous `computerAsync` spelling as an API name.
@@ -439,7 +441,7 @@ Assign the lighting system before `renderer.init()`:
 import * as THREE from 'three/webgpu';
 import { ClusteredLighting } from 'three/addons/lighting/ClusteredLighting.js';
 
-const renderer = new THREE.WebGPURenderer({ canvas, antialias: true });
+const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, alpha: false });
 renderer.lighting = new ClusteredLighting(
   1024, // maximum point lights
   32,   // tile size in pixels
@@ -501,9 +503,10 @@ buffer size. Resize the renderer and camera from one owner. There is no
 their creator's resize/disposal responsibility.
 
 Dispose the pipeline and every target-owning node after stopping the loop. The
-r185 runtime `BloomNode` has `dispose()`, while `@types/three@0.185.1` omits that
-declaration; keep the guarded cleanup described in `shaders.md` until the
-installed type declaration changes.
+r185+ runtime `BloomNode` has `dispose()`, while some `@types/three` releases
+may omit that method — cast or extend locally when types lag the runtime, and
+keep the guarded cleanup described in `shaders.md` until the installed type
+declaration catches up.
 
 ## Texture Compression And Output Bandwidth
 
@@ -537,6 +540,7 @@ mobile switch:
 ```ts
 const renderer = new THREE.WebGPURenderer({
   canvas,
+  alpha: false,
   outputBufferType: lowBandwidthTier
     ? THREE.UnsignedByteType
     : THREE.HalfFloatType,
@@ -611,7 +615,7 @@ objectives, or timing. Use hysteresis so adaptive quality does not oscillate.
 
 ## Current Deprecation Guardrails
 
-For r185.1 WebGPU code:
+For modern (r185+) WebGPU code:
 
 - use `RenderPipeline`, not the deprecated `PostProcessing` alias
 - use `pipeline.render()`, not deprecated `pipeline.renderAsync()`
@@ -635,7 +639,7 @@ For r185.1 WebGPU code:
   `onBeforeCompile()`, or `EffectComposer`
 
 Run `npm run audit:structure` when changing this skill: it scans
-executable Markdown examples and scaffold TypeScript for the curated r185.1
+executable Markdown examples and scaffold TypeScript for the curated r185+
 deprecated API set and renderer-family mixing.
 
 ## WebGPU Release Gate

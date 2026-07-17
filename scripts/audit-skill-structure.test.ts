@@ -23,8 +23,8 @@ function baseFiles(): Record<string, string> {
       "audit:local": "node --import tsx scripts/audit-local-only.ts",
       "setup:browsers": "playwright install chromium",
     },
-    dependencies: { three: "0.185.1" },
-    devDependencies: { "@types/three": "0.185.1" },
+    dependencies: { three: "^0.185.0" },
+    devDependencies: { "@types/three": "^0.185.0" },
   };
   return {
     "SKILL.md":
@@ -44,7 +44,10 @@ function baseFiles(): Record<string, string> {
       "import * as THREE from 'three';\n" +
       "declare const renderer: THREE.WebGLRenderer;\n" +
       "const timer = new THREE.Timer();\n" +
-      "renderer.setAnimationLoop(() => timer.update());\n",
+      "renderer.setAnimationLoop((time) => {\n" +
+      "  timer.update(time);\n" +
+      "  timer.getDelta();\n" +
+      "});\n",
   };
 }
 
@@ -164,20 +167,37 @@ test("exempts legal attribution from operational reference checks", () => {
   assert.equal(result.status, 0, diagnostic(result));
 });
 
-test("rejects an incorrect Three.js package baseline", () => {
+test("rejects a Three.js range below the r185 floor", () => {
   const files = baseFiles();
   files["assets/threejs-vite-game/package.json"] = JSON.stringify({
-    scripts: { "audit:local": "node --import tsx scripts/audit-local-only.ts" },
+    scripts: {
+      "audit:local": "node --import tsx scripts/audit-local-only.ts",
+      "setup:browsers": "playwright install chromium",
+    },
     dependencies: { three: "^0.184.0" },
     devDependencies: { "@types/three": "^0.184.1" },
   });
   const result = runAudit(files);
   assert.equal(result.status, 1);
   assert.equal(
-    result.stdout.split("incorrect Three.js scaffold baseline").length - 1,
+    result.stdout.split("Three.js scaffold dependency must admit r185 or newer").length - 1,
     2,
   );
-  assert.match(result.stdout, /0\.185\.1/);
+  assert.match(result.stdout, /0\.185\.0/);
+});
+
+test("accepts an open r185+ Three.js range newer than a frozen patch", () => {
+  const files = baseFiles();
+  files["assets/threejs-vite-game/package.json"] = JSON.stringify({
+    scripts: {
+      "audit:local": "node --import tsx scripts/audit-local-only.ts",
+      "setup:browsers": "playwright install chromium",
+    },
+    dependencies: { three: "^0.186.0" },
+    devDependencies: { "@types/three": "^0.186.0" },
+  });
+  const result = runAudit(files);
+  assert.equal(result.status, 0, diagnostic(result));
 });
 
 test("requires a TypeScript/npm scaffold audit with no Python dependency", () => {
@@ -275,7 +295,7 @@ test("rejects a WebGPU example with WebGL-only customization", () => {
   const files = baseFiles();
   files["references/core.md"] +=
     "\n```ts\n" +
-    "const renderer = new THREE.WebGPURenderer();\n" +
+    "const renderer = new THREE.WebGPURenderer({ alpha: false });\n" +
     "const composer = new EffectComposer(renderer);\n" +
     "```\n";
   const result = runAudit(files);
@@ -287,7 +307,7 @@ test("accepts current compute and WebGL TSL migration bridge", () => {
   const files = baseFiles();
   files["references/core.md"] +=
     "\n```ts\n" +
-    "const webgpu = new THREE.WebGPURenderer();\n" +
+    "const webgpu = new THREE.WebGPURenderer({ alpha: false });\n" +
     "await webgpu.computeAsync(computeNode);\n" +
     "```\n" +
     "```ts\n" +
@@ -327,11 +347,23 @@ test("requires an XR bypass in a scaffold RenderPipeline", () => {
   assert.equal(complete.status, 0, diagnostic(complete));
 });
 
+test("flags WebGPURenderer fences missing alpha: false", () => {
+  const files = baseFiles();
+  files["references/core.md"] +=
+    "\n```ts\nconst renderer = new THREE.WebGPURenderer({ antialias: true });\n```\n";
+  const result = runAudit(files);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout,
+    /WebGPURenderer example should set alpha: false unless annotated transparent/,
+  );
+});
+
 test("rejects renderer mixing across fences in one section", () => {
   const files = baseFiles();
   files["references/core.md"] +=
     "\n## One renderer recipe\n" +
-    "```ts\nconst renderer = new THREE.WebGPURenderer();\n```\n" +
+    "```ts\nconst renderer = new THREE.WebGPURenderer({ alpha: false });\n```\n" +
     "Continue the same recipe:\n" +
     "```ts\nconst composer = new EffectComposer(renderer);\n```\n";
   const result = runAudit(files);

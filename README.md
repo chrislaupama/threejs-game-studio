@@ -11,21 +11,6 @@ defaults, loads only the relevant internal reference chapters, sequences the
 work from design through release, and requires browser evidence before making
 quality claims.
 
-## Current baseline
-
-- Three.js r185 / `three@0.185.1`, verified 2026-07-17.
-- Vite 8 and TypeScript 6 starter project.
-- `THREE.Timer` and `renderer.setAnimationLoop()`.
-- `WebGLRenderer` as the mature compatibility/teaching default.
-- A first-class, typechecked `WebGPURenderer` + TSL + `RenderPipeline` route,
-  recommended for evaluation on graphics-heavy and compute-heavy 3D work.
-- Official addon imports from `three/addons/...`.
-- Local-first runtime assets and browser verification.
-
-Every task still begins by inspecting the installed Three.js revision. The live
-documentation can move ahead of npm, so the skill checks version-matching APIs
-and the official migration guide before changing an existing project.
-
 ## What is included
 
 - A coordinator workflow for learning checkpoints, focused fixes, full games,
@@ -50,9 +35,12 @@ and the official migration guide before changing an existing project.
   procedural audio, pause/retry/win/fail states, diagnostics, Playwright tests,
   explicit teardown, and a compile-checked optional WebGPU renderer adapter.
 
-Operational guidance lives in `SKILL.md` and `references/`. Reusable project
-templates and the starter game live in `assets/`; npm-driven TypeScript
-validation and scaffold tools live in `scripts/`.
+This skill targets **Three.js r185 and onwards**. Greenfield installs should use
+current npm latest (`npm install three`); always verify APIs against the
+project's installed revision, matching official docs/migration notes, and then
+these recipes. Operational guidance lives in `SKILL.md` and `references/`.
+Reusable project templates and the starter game live in `assets/`; npm-driven
+TypeScript validation and scaffold tools live in `scripts/`.
 
 ## Install
 

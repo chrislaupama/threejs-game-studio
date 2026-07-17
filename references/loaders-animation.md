@@ -146,6 +146,67 @@ Use `manager.setURLModifier()` only for a controlled mapping such as local
 drag-and-drop blob URLs. Preserve data/blob URLs and revoke every created blob
 URL after the loader no longer needs it.
 
+### End-to-end progress UI and failed-asset recovery
+
+```ts
+type LoadPhase = 'idle' | 'loading' | 'ready' | 'blocked';
+
+class BootLoader {
+  private phase: LoadPhase = 'idle';
+  private attempt = 0;
+
+  async loadCritical(urls: string[]): Promise<void> {
+    this.attempt += 1;
+    const attemptId = this.attempt;
+    const failed = new Set<string>();
+    const manager = new THREE.LoadingManager();
+    const gltf = new GLTFLoader(manager);
+    const textures = new THREE.TextureLoader(manager);
+
+    this.phase = 'loading';
+    ui.setProgress(0);
+    ui.setMessage('Loading local assets…');
+
+    manager.onProgress = (_url, loaded, total) => {
+      if (attemptId !== this.attempt) return; // ignore abandoned retries
+      ui.setProgress(total === 0 ? 0 : loaded / total);
+    };
+    manager.onError = (url) => {
+      if (attemptId !== this.attempt) return;
+      failed.add(url);
+      ui.reportAssetFailure(url);
+    };
+
+    try {
+      await Promise.all(
+        urls.map((url) =>
+          url.endsWith('.glb') || url.endsWith('.gltf')
+            ? gltf.loadAsync(url)
+            : textures.loadAsync(url),
+        ),
+      );
+    } catch (error) {
+      // Individual onError already recorded; keep going to onLoad semantics.
+      console.error(error);
+    }
+
+    if (attemptId !== this.attempt) return;
+    if (failed.size > 0) {
+      this.phase = 'blocked';
+      ui.showBlocked([...failed], () => {
+        void this.loadCritical(urls); // fresh manager + counters on retry
+      });
+      return;
+    }
+    this.phase = 'ready';
+    ui.showReady();
+  }
+}
+```
+
+Never let an abandoned attempt mark the new UI ready. Prefer actionable retry
+over silent fallback for critical hero/level assets.
+
 ## Production glTF Loader Stack
 
 Keep decoder support files in project-owned public paths. A Vite layout can be:
@@ -207,7 +268,7 @@ export function createModelLoaders(
 
 Initialize a `WebGPURenderer` through `setAnimationLoop()` or `await
 renderer.init()` before KTX2 support detection. Type the loader factory for the
-chosen renderer path; the union above is the current r185.1 `KTX2Loader`
+chosen renderer path; the union above is the current r185+ `KTX2Loader`
 contract and does not imply that WebGL GLSL materials or composer passes work
 with WebGPU.
 

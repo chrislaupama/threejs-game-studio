@@ -518,7 +518,7 @@ renderer family and TSL separately, then build a current
 import * as THREE from 'three/webgpu';
 import { pass } from 'three/tsl';
 
-const renderer = new THREE.WebGPURenderer({ antialias: true });
+const renderer = new THREE.WebGPURenderer({ antialias: true, alpha: false });
 await renderer.init();
 const pipeline = new THREE.RenderPipeline(renderer);
 const scenePass = pass(scene, camera);
@@ -534,11 +534,11 @@ await renderer.setAnimationLoop(() => {
 });
 ```
 
-This r185 branch is required for an XR-capable game: `RenderPipeline.render()`
+This branch is required for an XR-capable game: `RenderPipeline.render()`
 temporarily disables XR while it owns rendering. Treat node post-processing as
 a desktop/non-XR path, render the scene directly while `xr.isPresenting`, and
 tell the player that those effects are disabled in-headset. Only use a
-different XR post path after exact-version, on-device verification.
+different XR post path after on-device verification for the installed revision.
 
 `RenderPipeline` applies tone mapping and output color conversion by default.
 If an effect such as FXAA specifically needs display-referred input, use

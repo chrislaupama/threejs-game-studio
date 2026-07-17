@@ -58,7 +58,10 @@ function copyAllowed(source: string): boolean {
   return !EXCLUDE_DIRS.has(name) && !EXCLUDE_FILES.has(name);
 }
 
-export function createGame(targetInput: string): string {
+export function createGame(
+  targetInput: string,
+  options: { name?: string } = {},
+): string {
   const target = resolve(targetInput);
   if (!existsSync(SCAFFOLD_DIR) || !statSync(SCAFFOLD_DIR).isDirectory()) {
     throw new Error(`Scaffold not found: ${SCAFFOLD_DIR}`);
@@ -99,26 +102,69 @@ export function createGame(targetInput: string): string {
     resolve(docs, 'game-report.md'),
   );
 
-  const projectName = normalizedProjectName(target);
+  const projectName = options.name
+    ? normalizedProjectName(options.name)
+    : normalizedProjectName(target);
   rewriteJsonName(resolve(target, 'package.json'), projectName);
   rewriteJsonName(resolve(target, 'package-lock.json'), projectName);
   return target;
 }
 
+function printPostCreateChecklist(target: string): void {
+  console.log(`Created Three.js game scaffold at ${target}`);
+  console.log('');
+  console.log('Post-create checklist:');
+  console.log(`  1. cd ${target}`);
+  console.log('  2. npm install          # installs current three (r185+ range)');
+  console.log('  3. npm run setup:browsers');
+  console.log('  4. npm run probe:three  # optional; or from skill: npm run probe:three -- <game>');
+  console.log('  5. npm run dev');
+  console.log('');
+  console.log(
+    'Authority: installed THREE.REVISION → official docs/migration → skill recipes.',
+  );
+  console.log('Prefer current npm latest for greenfield; minimum floor is r185.');
+}
+
 export function main(argv = process.argv.slice(2)): number {
-  if (argv.length !== 1 || argv[0] === '-h' || argv[0] === '--help') {
-    const stream = argv.includes('-h') || argv.includes('--help')
-      ? process.stdout
-      : process.stderr;
-    stream.write('Usage: npm run create:game -- <target-directory>\n');
-    return argv.includes('-h') || argv.includes('--help') ? 0 : 2;
+  let name: string | undefined;
+  const positionals: string[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index]!;
+    if (argument === '-h' || argument === '--help') {
+      console.log(
+        'Usage: npm run create:game -- <target-directory> [--name <package-name>]\n' +
+          '  Creates a Vite + TypeScript Three.js (r185+) scaffold.\n' +
+          '  After create, run npm install so three resolves to current compatible latest.',
+      );
+      return 0;
+    }
+    if (argument === '--name') {
+      name = argv[++index];
+      if (!name) {
+        console.error('create-threejs-game.ts: error: --name requires a value');
+        return 2;
+      }
+      continue;
+    }
+    if (argument.startsWith('--name=')) {
+      name = argument.slice('--name='.length);
+      continue;
+    }
+    if (argument.startsWith('-')) {
+      console.error(`create-threejs-game.ts: error: unrecognized arguments: ${argument}`);
+      return 2;
+    }
+    positionals.push(argument);
   }
 
-  const target = createGame(resolveInvocationPath(argv[0]));
-  console.log(`Created Three.js game scaffold at ${target}`);
-  console.log(
-    `Next: cd ${target} && npm install && npm run setup:browsers && npm run dev`,
-  );
+  if (positionals.length !== 1) {
+    console.error('Usage: npm run create:game -- <target-directory> [--name <package-name>]');
+    return 2;
+  }
+
+  const target = createGame(resolveInvocationPath(positionals[0]!), { name });
+  printPostCreateChecklist(target);
   return 0;
 }
 

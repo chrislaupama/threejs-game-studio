@@ -106,6 +106,7 @@ const renderer = new THREE.WebGPURenderer({
   // Native WebGPU XR in r185 disables MSAA and multiview for the XR session.
   antialias: false,
   multiview: false,
+  alpha: false,
 });
 
 await renderer.init();
@@ -148,6 +149,7 @@ function createRenderer(forceWebGL: boolean) {
   const next = new THREE.WebGPURenderer({
     antialias: forceWebGL,
     forceWebGL,
+    alpha: false,
     outputBufferType: THREE.UnsignedByteType,
   });
   next.xr.enabled = true;

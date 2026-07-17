@@ -395,6 +395,14 @@ export class Game {
 
   private publishDiagnostics(): void {
     const info = this.renderer.info;
+    const dpr = this.renderer.getPixelRatio();
+    const toneMappingName =
+      Object.entries(THREE)
+        .find(
+          ([key, value]) =>
+            key.endsWith('ToneMapping') && value === this.renderer.toneMapping,
+        )?.[0] ?? String(this.renderer.toneMapping);
+
     window.__THREE_GAME_DIAGNOSTICS__ = {
       frame: this.frame,
       elapsed: this.elapsed,
@@ -414,11 +422,15 @@ export class Game {
       },
       renderer: {
         revision: THREE.REVISION,
+        type: this.renderer.constructor.name,
         backend: 'webgl',
+        toneMapping: toneMappingName,
+        toneMappingExposure: this.renderer.toneMappingExposure,
         calls: info.render.calls,
         triangles: info.render.triangles,
         geometries: info.memory.geometries,
         textures: info.memory.textures,
+        dpr,
       },
       camera: {
         aspect: this.camera.aspect,
@@ -428,7 +440,7 @@ export class Game {
         clientHeight: this.canvas.clientHeight,
         width: this.canvas.width,
         height: this.canvas.height,
-        dpr: this.renderer.getPixelRatio(),
+        dpr,
       },
     };
   }

@@ -350,6 +350,31 @@ function afterStaticLightingChanged() {
 Do not freeze shadows while a shadow-casting player or door still moves.
 Separate static baked/fake shadowing from the small set of dynamic casters.
 
+### Directional framing + contact-shadow fake
+
+Frame the key light so the playable silhouette reads clearly, then ground
+characters with a cheap blob rather than a second expensive shadow map:
+
+```ts
+const sun = new THREE.DirectionalLight(0xfff2dd, 2.4);
+sun.position.set(6, 10, 4);
+sun.target.position.set(0, 0, 0);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -12;
+sun.shadow.camera.right = 12;
+sun.shadow.camera.top = 12;
+sun.shadow.camera.bottom = -12;
+sun.shadow.camera.near = 1;
+sun.shadow.camera.far = 40;
+scene.add(sun);
+scene.add(sun.target);
+
+// Cheap contact cue under the player (see blob texture helper above).
+blob.position.set(player.x, 0.02, player.z);
+blob.scale.setScalar(0.9 + player.speed * 0.05);
+```
+
 ### Shadow type
 
 Use `THREE.PCFShadowMap` as the current filtered WebGL baseline. Do not introduce

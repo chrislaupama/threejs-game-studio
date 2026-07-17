@@ -78,3 +78,50 @@ For spatially complex work, capture:
 - intent, resolution, and commit owners
 - multi-actor policy when applicable
 - shared world-query implementation when applicable
+
+## Concrete Unit And Axis Examples
+
+Record and enforce one basis near scene boot:
+
+```ts
+/** World: meters, Y-up, -Z forward (Three.js default). */
+export const WORLD = {
+  units: 'meters',
+  up: new THREE.Vector3(0, 1, 0),
+  forward: new THREE.Vector3(0, 0, -1),
+} as const;
+```
+
+### glTF intake
+
+```ts
+import { SkeletonUtils } from 'three/addons/utils/SkeletonUtils.js';
+
+async function loadActor(url: string): Promise<THREE.Object3D> {
+  const gltf = await gltfLoader.loadAsync(url);
+  const root = SkeletonUtils.clone(gltf.scene); // skinned: clone skeleton graph
+  // Normalize once at the asset boundary — do not scatter fixup rotations later.
+  root.rotation.set(0, 0, 0);
+  root.scale.setScalar(1); // or authored meters-per-unit
+  root.updateMatrixWorld(true);
+  return root;
+}
+```
+
+### Raycast vs collider
+
+Keep picking meshes and collision proxies on separate layers:
+
+```ts
+const LAYER_VISUAL = 0;
+const LAYER_COLLIDER = 1;
+
+visual.layers.set(LAYER_VISUAL);
+collider.layers.set(LAYER_COLLIDER);
+
+raycaster.layers.set(LAYER_VISUAL); // UI picking
+// simulation queries collider meshes / authored AABBs, not decorative LODs
+```
+
+Authoritative motion commits to the collider/proxy transform; the visual mesh
+may interpolate or offset for presentation only (`spatial-contracts` §2).

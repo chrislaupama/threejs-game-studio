@@ -21,12 +21,15 @@ Asset-loading examples use the project-owned `publicAssetUrl()` helper from
 
 ## Local Project Baseline
 
-Install and pin the local package:
+Install current Three.js (r185+ floor). Prefer npm latest for greenfield:
 
 ```bash
-npm install three@0.185.1
-npm install --save-dev @types/three@0.185.1 vite typescript
+npm install three
+npm install --save-dev @types/three vite typescript
 ```
+
+Confirm the installed revision is at least 185 (`THREE.REVISION` / `npm ls three`)
+before copying modern APIs from this skill.
 
 Use one canvas owned by the renderer:
 
@@ -535,8 +538,9 @@ visibility, and audio listeners through the same lifecycle owner.
 
 Before adding deep gameplay or rendering polish, prove:
 
-- The installed package and lockfile agree on `0.185.1` or the preserved
-  project version.
+- The installed package and lockfile agree on an r185+ revision (or the
+  preserved project version below that floor only when upgrading is out of
+  scope—and then do not copy r185+ APIs blindly).
 - Imports resolve locally and the production preview performs no outbound
   runtime requests.
 - The canvas is nonblank, camera framing is intentional, and no object is

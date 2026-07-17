@@ -521,6 +521,26 @@ function auditMarkdownTypescriptExamples(root: string): Finding[] {
             WEBGPU_UNSUPPORTED_PATTERNS,
           );
         }
+
+        const sectionHasOpaqueAlpha = sectionFences.some(({ code, body }) => {
+          if (/\balpha\s*:\s*false\b/.test(code)) return true;
+          // Allow an explicit annotation when a transparent canvas is intentional.
+          return /webgpu-transparent-canvas|intentional\s+transparent\s+canvas/i.test(body);
+        });
+        const constructsWebGpu = sectionFences.some(({ code }) =>
+          /\bnew\s+(?:THREE\.)?WebGPURenderer\s*\(/.test(code),
+        );
+        if (constructsWebGpu && !sectionHasOpaqueAlpha) {
+          const fence = sectionFences.find(({ code }) =>
+            /\bnew\s+(?:THREE\.)?WebGPURenderer\s*\(/.test(code),
+          )!;
+          findings.push({
+            path: relativePath(root, path),
+            line: lineFor(text, fence.bodyStart),
+            reason: "WebGPURenderer example should set alpha: false unless annotated transparent",
+            excerpt: excerptFor(text, fence.bodyStart),
+          });
+        }
       }
       if (hasWebGl) {
         for (const fence of sectionFences) {
@@ -756,6 +776,18 @@ function jsonErrorLine(text: string, error: unknown): number {
   return line === undefined ? 1 : Number.parseInt(line, 10);
 }
 
+/** Minimum modern floor: r185 / 0.185.x. Accepts exact, caret, tilde, or >= ranges. */
+export function isModernThreeRange(specifier: unknown, packageName: string): boolean {
+  if (typeof specifier !== "string" || !specifier.trim()) return false;
+  const value = specifier.trim();
+  // Allow "latest" / "*" only for three itself when agents intentionally track npm.
+  if (packageName === "three" && (value === "latest" || value === "*")) return true;
+  const match = /^(?:[\^~>=\s]*)?0\.(1[89]\d|[2-9]\d{2}|\d{4,})\.\d+/.exec(value);
+  if (!match) return false;
+  const minor = Number.parseInt(value.replace(/^[^\d]*/, "").split(".")[1] ?? "0", 10);
+  return minor >= 185;
+}
+
 function auditScaffoldPackage(root: string): Finding[] {
   const relativeName = "assets/threejs-vite-game/package.json";
   const path = join(root, ...relativeName.split("/"));
@@ -793,22 +825,22 @@ function auditScaffoldPackage(root: string): Finding[] {
 
   const packageRecord = packageJson as Record<string, unknown>;
   const findings = [...result.findings];
-  const expectations: ReadonlyArray<readonly [string, string, string]> = [
-    ["dependencies", "three", "0.185.1"],
-    ["devDependencies", "@types/three", "0.185.1"],
+  const expectations: ReadonlyArray<readonly [string, string]> = [
+    ["dependencies", "three"],
+    ["devDependencies", "@types/three"],
   ];
-  for (const [section, packageName, expected] of expectations) {
+  for (const [section, packageName] of expectations) {
     const values = packageRecord[section];
     const actual =
       typeof values === "object" && values !== null && !Array.isArray(values)
         ? (values as Record<string, unknown>)[packageName]
         : undefined;
-    if (actual !== expected) {
+    if (!isModernThreeRange(actual, packageName)) {
       findings.push({
         path: relativeName,
         line: packageLine(text, packageName),
-        reason: "incorrect Three.js scaffold baseline",
-        excerpt: `${section}.${packageName}: expected '${expected}', found ${
+        reason: "Three.js scaffold dependency must admit r185 or newer",
+        excerpt: `${section}.${packageName}: expected open r185+ range (e.g. '^0.185.0'), found ${
           actual === undefined ? "None" : `'${String(actual)}'`
         }`,
       });
@@ -887,6 +919,22 @@ function auditScaffoldTypescript(root: string): Finding[] {
     const code = stripTypescriptCommentsAndStrings(text);
     if (/\bnew\s+THREE\.Timer\s*\(/.test(code)) usesTimer = true;
     if (/\b(?:this\.)?renderer\.setAnimationLoop\s*\(/.test(code)) usesAnimationLoop = true;
+    if (/\b(?:new\s+THREE\.Timer|\btimer\b)/.test(code) && /\.update\s*\(/.test(code)) {
+      // Timer.update is required before getDelta/getElapsed in modern recipes.
+    }
+
+    const timerWithoutUpdate =
+      /\bnew\s+THREE\.Timer\s*\(/.test(code) &&
+      /\btimer\.(?:getDelta|getElapsed)\s*\(/.test(code) &&
+      !/\btimer\.update\s*\(/.test(code);
+    if (timerWithoutUpdate) {
+      findings.push({
+        path: relativePath(root, path),
+        line: 1,
+        reason: "Timer recipes must call timer.update before reading delta/elapsed",
+        excerpt: "expected timer.update(...) before getDelta/getElapsed",
+      });
+    }
 
     const pipelineRender = /\b(?:this\.)?pipeline\.render\s*\(/.exec(code);
     if (
@@ -995,7 +1043,7 @@ export function main(argv = process.argv.slice(2)): number {
     "Skill structure audit passed: one coordinator owns every bundled reference; " +
       "relative Markdown links resolve; executable examples avoid curated deprecated APIs " +
       "and incompatible renderer stacks; no operational cross-skill references remain; " +
-      "and the scaffold uses TypeScript/npm tooling with the declared r185 baseline, Timer, " +
+      "and the scaffold uses TypeScript/npm tooling with an r185+ Three.js range, Timer, " +
       "and animation-loop contracts.",
   );
   return 0;

@@ -30,11 +30,12 @@ procedural, project-local, user-supplied, deferred]
 ## Three.js and runtime contract
 
 - Three.js revision (installed package and `THREE.REVISION`, for example
-  `three@0.185.1 / r185`):
+  `three@<installed> / r<REVISION>` — confirm r185+):
 - Renderer/backend (`WebGLRenderer`/WebGL or `WebGPURenderer`/WebGPU, including
   any fallback):
 - Documentation/version baseline (official pages/source checked against the
-  installed revision):
+  installed revision; skill last-verify note is informational only):
+- Tone mapping / color (`ACESFilmic` / `AgX` / `Neutral`, exposure, opaque canvas):
 - Lifecycle/disposal (owner of start, loop, reset, listeners, GPU/audio
   resources, dispose, and re-entry):
 - Resize/DPR (tested viewports/orientation, camera and render-target resize,

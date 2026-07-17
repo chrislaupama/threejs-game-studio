@@ -13,9 +13,10 @@
 - Porting GLSL concepts to TSL
 - Performance, fallback, and QA gates
 
-Target `three@0.185.1`. Keep shader source, textures, lookup data, and generated
-noise modules in the project. Never load shader strings, textures, presets, or
-post-processing code from a runtime URL.
+Target **Three.js r185+** (verify against the installed revision). Keep shader
+source, textures, lookup data, and generated noise modules in the project. Never
+load shader strings, textures, presets, or post-processing code from a runtime
+URL.
 
 Texture-loading examples use the project-owned `publicAssetUrl()` helper from
 `local-assets.md`; import it from the local asset boundary in real code.
@@ -322,7 +323,7 @@ from their current package exports:
 import * as THREE from 'three/webgpu';
 import { color, mix, texture, time, uniform, uv } from 'three/tsl';
 
-const renderer = new THREE.WebGPURenderer({ antialias: true });
+const renderer = new THREE.WebGPURenderer({ antialias: true, alpha: false });
 await renderer.init();
 await renderer.setAnimationLoop(render);
 ```
@@ -484,7 +485,7 @@ must also be disposed explicitly:
 function disposeWebGpuRendering() {
   void renderer.setAnimationLoop(null);
   pipeline.dispose();
-  // r185 runtime BloomNode has dispose(), while @types/three@0.185.1 omits it.
+  // Runtime BloomNode has dispose(); some @types/three releases omit it.
   if ('dispose' in glow && typeof glow.dispose === 'function') glow.dispose();
   scenePass.dispose();
   renderer.dispose();

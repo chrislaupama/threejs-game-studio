@@ -52,10 +52,12 @@ is available:
 npm view three version
 ```
 
-The authored and tested baseline for this skill is `three@0.185.1` (r185),
-verified 2026-07-17. The live docs can move ahead of the latest npm release, so
-never copy a current-doc API into an older installed project without checking
-the official migration guide and the version-matching source/examples.
+This skill is universal for **Three.js r185 and onwards**. Prefer current npm
+latest for greenfield installs (`npm install three` / `three@latest`), with a
+minimum floor of r185 (Timer-in-core, `HDRLoader`, soft `PCFShadowMap`, and
+`RenderPipeline` naming). Never copy a live-doc API into an older installed
+project without checking the official migration guide and version-matching
+source/examples.
 
 Use this authority order:
 
@@ -69,12 +71,10 @@ Preserve an existing project's version unless the user asked for an upgrade or
 the requested feature requires one. Never perform a wide revision jump as a
 side effect of an unrelated fix.
 
-If npm stable is newer than this package's r185.1 tested baseline, state the
-difference. For a reproducible novice build, keep the bundled exact baseline.
-For a request that explicitly requires the newest stable release, pin that
-release only after checking its migration notes, source/types, every used addon
-and renderer path, and the full build/browser suite; do not merely change the
-version string and call the bundled recipes current.
+If the installed revision differs from live docs or from skill last-check notes,
+verify before copying APIs. When upgrading past recipes last verified against,
+re-check migration notes, source/types, every used addon and renderer path, and
+the full build/browser suite; do not treat skill text as frozen API law.
 
 ## Local-First Runtime Contract
 
@@ -168,7 +168,8 @@ have a contents section and copyable examples.
 
 | Need | Required reference |
 | --- | --- |
-| Current r185 APIs, official sources, migration traps | `references/official-docs.md` |
+| Modern r185+ APIs, official sources, migration traps | `references/official-docs.md` |
+| One-page r185+ cheat sheet (imports, loop, color, shadows, loaders, post, disposal) | `references/quickref.md` |
 | Beginner mental model, scene/camera/renderer/timer/resize/lifecycle | `references/fundamentals.md` |
 | Full production phases, ledgers, exit evidence | `references/workflow.md` |
 | Player promise, core loop, level/encounter, progression, difficulty | `references/game-design.md` |
@@ -179,12 +180,15 @@ have a contents section and copyable examples.
 | Geometry, BufferGeometry, procedural meshes, merging, instancing, batching | `references/geometry.md` |
 | PBR materials, textures, UVs, color spaces, transparency, environment maps | `references/materials-textures.md` |
 | Light selection, shadows, baking/fakes, environment and readability | `references/lighting-shadows.md` |
+| Linear workflow, ACES vs AgX vs Neutral tone mapping, OutputPass / RenderOutputNode | `references/tone-mapping-color.md` |
 | LoadingManager, GLTF/DRACO/KTX2/Meshopt, animation mixers and state machines | `references/loaders-animation.md` |
 | Local model, texture, font, audio intake, provenance, optimization, disposal | `references/local-assets.md` |
 | Collision model, fixed step, sweeps, triggers, authored response | `references/physics.md` |
 | Responsiveness, hit feedback, shake, hitstop, camera kick, tuning | `references/game-feel.md` |
 | Procedural hero/enemy/reward/world construction | `references/procedural-modeling.md` |
 | Art direction, material roles, world layers, VFX ownership | `references/visual-architecture.md` |
+| Hit sparks, trails, muzzle/impact flashes, pooled sprites/points, GPU particles | `references/vfx.md` |
+| CSS2D/CSS3D overlays, Line2, billboards, TransformControls handoff | `references/overlays.md` |
 | Renderer setup, composition, color, fog, post, renderer diagnostics | `references/rendering.md` |
 | Heavy-3D WebGPU decision, boot, fallback, TSL, compute, clustered lights, profiling | `references/webgpu.md` |
 | WebGL GLSL/onBeforeCompile and WebGPU TSL/RenderPipeline recipes | `references/shaders.md` |
@@ -286,15 +290,20 @@ the scorecard with measured evidence and conduct a fresh-eyes pass.
   with a teardown path.
 - Keep debug/tuning/test hooks explicit and gated from production presentation.
 
-## Current r185 Guardrails
+## Modern API Guardrails (r185+)
 
-Generate current APIs:
+Prefer current names; reject legacy aliases:
 
 - Use `THREE.Timer`; do not introduce deprecated `THREE.Clock`.
 - Use `renderer.setAnimationLoop()` for WebGL, WebGPU, and XR compatibility.
 - Import official addons from `three/addons/...`.
 - Use `renderer.outputColorSpace`, `texture.colorSpace`,
   `THREE.SRGBColorSpace`, and `THREE.LinearSRGBColorSpace`.
+- Choose intentional tone mapping (`ACESFilmicToneMapping`, `AgXToneMapping`, or
+  `NeutralToneMapping`) for lit PBR; do not leave games on default
+  `NoToneMapping` without a reason. See `references/tone-mapping-color.md`.
+- Prefer opaque canvases (`alpha: false`) plus opaque `Scene.background` /
+  `setClearColor` unless HTML compositing is required.
 - Use `HDRLoader`, not the deprecated `RGBELoader` alias.
 - Use `THREE.PCFShadowMap`, not deprecated `PCFSoftShadowMap`.
 - Use `BufferGeometryUtils.mergeGeometries()`, not
@@ -305,20 +314,20 @@ Generate current APIs:
 - Use WebGPU node materials/TSL and `THREE.RenderPipeline`; never combine
   WebGPU with `ShaderMaterial`, `RawShaderMaterial`, `onBeforeCompile()`, or
   `EffectComposer`.
-- In r185, bypass `RenderPipeline` while `renderer.xr.isPresenting` and render
-  the scene directly. The pipeline temporarily disables XR; treat its node
-  post-processing as a desktop/non-XR path unless an exact-version,
-  on-device-tested XR pipeline proves otherwise.
+- Bypass `RenderPipeline` while `renderer.xr.isPresenting` and render the scene
+  directly. The pipeline temporarily disables XR; treat its node post-processing
+  as a desktop/non-XR path unless an on-device-tested XR pipeline proves
+  otherwise for the installed revision.
 - Initialize WebGPU before renderer-dependent loader detection or eager renders.
 - After WebGPU initialization, prefer current synchronous `render()`,
   `clear()`, `hasFeature()`, and `initTexture()` APIs. `computeAsync()` remains
-  current in r185.1; do not incorrectly classify every async Renderer method as
-  deprecated.
+  current; do not incorrectly classify every async Renderer method as
+  deprecated—verify each method against the installed revision.
 - Keep `FileLoader.load()` callback-driven; do not rely on a return value.
 
 ## Greenfield Scaffold
 
-Create the packaged Vite + TypeScript + Three.js r185 game. It includes a
+Create the packaged Vite + TypeScript + Three.js (r185+) game. It includes a
 playable collection loop, desktop/touch input, procedural audio, explicit
 state, diagnostics, local-only request checks, Playwright smoke coverage, clean
 teardown, and a typechecked optional WebGPU renderer adapter for projects that

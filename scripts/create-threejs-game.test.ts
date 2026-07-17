@@ -53,6 +53,8 @@ test('advertises the actual npm create command', () => {
   );
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /npm run create:game -- <target-directory>/);
+  assert.match(result.stdout, /--name/);
+  assert.match(result.stdout, /r185/);
 });
 
 test('creates an npm-ready TypeScript scaffold without build artifacts', async () => {
@@ -74,6 +76,7 @@ test('creates an npm-ready TypeScript scaffold without build artifacts', async (
   assert.ok(existsSync(resolve(target, 'scripts/inspect-threejs-canvas.ts')));
   assert.ok(existsSync(resolve(target, 'docs/content-provenance.md')));
   assert.ok(existsSync(resolve(target, 'docs/game-report.md')));
+  assert.ok(existsSync(resolve(target, 'docs/three-revision.md')));
   const viteConfig = readFileSync(resolve(target, 'vite.config.ts'), 'utf8');
   assert.equal(viteConfig.match(/port:\s*5188/g)?.length, 2);
   assert.equal(existsSync(resolve(target, 'dist')), false);

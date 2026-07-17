@@ -15,11 +15,15 @@ interface ThreeGameDiagnostics {
   };
   renderer: {
     revision: string;
+    type: string;
     backend: 'webgl' | 'webgpu';
+    toneMapping: string;
+    toneMappingExposure: number;
     calls: number;
     triangles: number;
     geometries: number;
     textures: number;
+    dpr: number;
   };
   camera: {
     aspect: number;
