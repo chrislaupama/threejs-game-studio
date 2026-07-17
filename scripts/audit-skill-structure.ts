@@ -984,6 +984,7 @@ export function audit(skillRoot: string): Finding[] {
     ...auditCrossSkillReferences(root, skillFiles.skillName),
     ...auditScaffoldPackage(root),
     ...auditScaffoldTypescript(root),
+    ...auditProductivityPass(root),
   ].sort(
     (left, right) =>
       compareText(left.path, right.path) ||
@@ -991,6 +992,86 @@ export function audit(skillRoot: string): Finding[] {
       compareText(left.reason, right.reason) ||
       compareText(left.excerpt, right.excerpt),
   );
+}
+
+function auditProductivityPass(root: string): Finding[] {
+  const packagePath = join(root, "package.json");
+  if (!isFile(packagePath)) return [];
+
+  let packageName = "";
+  let scripts: Record<string, unknown> = {};
+  try {
+    const packageJson = JSON.parse(readFileSync(packagePath, "utf8")) as {
+      name?: string;
+      scripts?: Record<string, unknown>;
+    };
+    packageName = packageJson.name ?? "";
+    scripts = packageJson.scripts ?? {};
+  } catch {
+    return [];
+  }
+  // Mini fixtures used by unit tests omit the full productivity surface.
+  if (packageName !== "threejs-game-studio") return [];
+
+  const findings: Finding[] = [];
+  const requiredRefs = [
+    "references/load-budgets.md",
+    "references/upgrade-existing.md",
+    "references/networking-boundary.md",
+  ];
+  for (const relativeName of requiredRefs) {
+    if (!isFile(join(root, ...relativeName.split("/")))) {
+      findings.push({
+        path: relativeName,
+        line: 1,
+        reason: "productivity-pass reference is missing",
+        excerpt: relativeName,
+      });
+    }
+  }
+
+  if (!isFile(join(root, "evals", "golden-tasks.md"))) {
+    findings.push({
+      path: "evals/golden-tasks.md",
+      line: 1,
+      reason: "golden eval tasks are missing",
+      excerpt: "evals/golden-tasks.md",
+    });
+  }
+
+  for (const genre of ["runner", "shooter", "platformer"]) {
+    const overlayGame = join(root, "assets", "genre-overlays", genre, "src", "game", "Game.ts");
+    const contract = join(root, "assets", "genre-overlays", genre, "docs", "genre-contract.md");
+    if (!isFile(overlayGame)) {
+      findings.push({
+        path: relativePath(root, overlayGame),
+        line: 1,
+        reason: "genre overlay Game.ts is missing",
+        excerpt: genre,
+      });
+    }
+    if (!isFile(contract)) {
+      findings.push({
+        path: relativePath(root, contract),
+        line: 1,
+        reason: "genre overlay contract doc is missing",
+        excerpt: genre,
+      });
+    }
+  }
+
+  for (const scriptName of ["ship-check", "audit:assets"]) {
+    if (typeof scripts[scriptName] !== "string") {
+      findings.push({
+        path: "package.json",
+        line: 1,
+        reason: "root package.json missing productivity script",
+        excerpt: scriptName,
+      });
+    }
+  }
+
+  return findings;
 }
 
 const HELP = `usage: audit-skill-structure.ts [-h] [skill]

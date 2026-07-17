@@ -54,7 +54,17 @@ test('advertises the actual npm create command', () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /npm run create:game -- <target-directory>/);
   assert.match(result.stdout, /--name/);
+  assert.match(result.stdout, /--genre/);
   assert.match(result.stdout, /r185/);
+});
+
+test('applies runner genre overlay files', async () => {
+  const parent = await temporaryDirectory();
+  const target = resolve(parent, 'runner-game');
+  createGame(target, { genre: 'runner' });
+  assert.ok(existsSync(resolve(target, 'docs/genre-contract.md')));
+  const gameSource = readFileSync(resolve(target, 'src/game/Game.ts'), 'utf8');
+  assert.match(gameSource, /distance|runner|lane/i);
 });
 
 test('creates an npm-ready TypeScript scaffold without build artifacts', async () => {

@@ -287,6 +287,15 @@ Run:
 npm run audit:local
 ```
 
+For imported models and textures, also run this package's asset checklist:
+
+```bash
+npm --prefix <this-skill-dir> run audit:assets -- <project>
+```
+
+Paste warning lines into `docs/content-provenance.md` and resolve colorSpace,
+scale/axes, and compression before release.
+
 Also verify:
 
 - Every runtime URL is relative/project-local.

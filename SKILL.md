@@ -15,14 +15,29 @@ for a game.
 Use this file as the control plane and the bundled `references/` as
 progressive-disclosure manuals. Never ask the user to choose manuals or phases.
 
+### Common Failure Modes
+
+Reject these outcomes before claiming progress or quality:
+
+- A rendered scene or camera orbit presented as a game (no verb, objective, or retry).
+- Architecture, material libraries, or post stacks before one playable loop works.
+- Glow, bloom, fog, or particles used to hide weak forms or sparse worlds.
+- Mixing WebGL GLSL/`EffectComposer` recipes with WebGPU TSL/`RenderPipeline` on one path.
+- Quality or "done" claims without real browser evidence (build alone is not enough).
+
+### Coordinator Steps
+
 1. Classify delivery as tutorial or direct, then classify scope as focused,
    broad-production, or release. Tutorial delivery never reduces the required
    scope.
 2. Inspect the project before prescribing architecture or dependencies.
 3. Run the version and renderer decision gate.
-4. Load every reference required for the current phase before implementing it.
-5. Keep design, decision, content, performance, and verification ledgers for
-   broad work.
+4. Load `references/load-budgets.md`, then only the minimum refs for this scope
+   (plus triggered refs). Do not preload premium/WebGPU/shader/release manuals
+   before the playable loop is proven.
+5. Keep design, decision, content, performance, and verification ledgers only
+   for broad, premium, or release work. Focused work: reproduce → fix →
+   proportionate QA with owning refs + `qa-release.md` — no full ledger ceremony.
 6. Implement the smallest complete playable loop before expensive polish.
 7. Integrate all phase output through one game state, one update order, and one
    lifecycle owner.
@@ -91,8 +106,8 @@ Keep generated games self-contained by default:
 - Keep official documentation links in the skill references; documentation
   links are research sources, not runtime dependencies.
 - If the user explicitly requests networking, cloud saves, multiplayer, or a
-  remote service, identify the boundary and obtain the needed architecture and
-  authority instead of disguising it as local functionality.
+  remote service, load `references/networking-boundary.md`, stop inventing
+  netcode inside the render loop, and obtain explicit architecture approval.
 
 For imported local content, read `references/local-assets.md` and record source,
 ownership/license, runtime path, scale, axes, bounds, clips, texture cost, and
@@ -115,16 +130,18 @@ focused.
 ### Focused scope
 
 Use for a narrow defect, mechanic, renderer issue, asset import, UI state, or
-performance bottleneck. Read the owning references plus
-`references/qa-release.md`,
-preserve unrelated behavior, reproduce first, and run proportionate QA.
+performance bottleneck. Read the owning references plus `quickref.md` and
+`references/qa-release.md` per `load-budgets.md`. Preserve unrelated behavior,
+reproduce first, and run proportionate QA. Do not maintain full design/content
+ledgers.
 
 ### Broad-production scope
 
 Use for a new game, major upgrade, "complete", "polished", "premium",
-"showcase", or "less basic" request. Read `references/workflow.md`, execute every
-applicable phase, and keep the ledgers. A broad request is not complete after a
-vertical slice unless the user explicitly chose a slice.
+"showcase", or "less basic" request. Read `references/load-budgets.md` then
+`references/workflow.md`, execute every applicable phase, and keep the ledgers.
+A broad request is not complete after a vertical slice unless the user
+explicitly chose a slice.
 
 ### Release scope
 
@@ -163,11 +180,29 @@ advanced post-processing as deliberate upgrades.
 
 ## Reference Router
 
+### Fast decision tree
+
+Use this before opening the full table. Then load only the budgeted refs.
+
+- Blank or broken canvas → `references/debugging-performance.md`
+- Controls or feel bad → `references/game-feel.md` + `references/interaction.md`
+- Looks basic / premium ask → `references/visual-architecture.md` + scorecard
+- New game → `references/load-budgets.md` first-playable set + genre section
+- Upgrade old Three.js / CDN / global `THREE` → `references/upgrade-existing.md`
+- Import or asset issues → `references/local-assets.md` + `npm run audit:assets`
+- Multiplayer / cloud / netcode ask → `references/networking-boundary.md` (stop)
+
+### Detailed index
+
 Read the listed file before making decisions or code in that area. Long files
-have a contents section and copyable examples.
+have a contents section and copyable examples. Prefer `load-budgets.md` over
+loading this entire table.
 
 | Need | Required reference |
 | --- | --- |
+| Minimum refs per scope; hard defer rules | `references/load-budgets.md` |
+| Legacy CDN / pre-r185 migration order | `references/upgrade-existing.md` |
+| Multiplayer / cloud boundary (approval required) | `references/networking-boundary.md` |
 | Modern r185+ APIs, official sources, migration traps | `references/official-docs.md` |
 | One-page r185+ cheat sheet (imports, loop, color, shadows, loaders, post, disposal) | `references/quickref.md` |
 | Beginner mental model, scene/camera/renderer/timer/resize/lifecycle | `references/fundamentals.md` |
@@ -327,15 +362,14 @@ Prefer current names; reject legacy aliases:
 
 ## Greenfield Scaffold
 
-Create the packaged Vite + TypeScript + Three.js (r185+) game. It includes a
-playable collection loop, desktop/touch input, procedural audio, explicit
-state, diagnostics, local-only request checks, Playwright smoke coverage, clean
-teardown, and a typechecked optional WebGPU renderer adapter for projects that
-select that path.
+Create the packaged Vite + TypeScript + Three.js (r185+) game. Default genre is
+the collect-and-avoid arena. Pass `--genre runner|shooter|platformer` to apply a
+genre overlay on the shared ownership seams.
 
 ```bash
 npm --prefix <this-skill-dir> install
 npm --prefix <this-skill-dir> run create:game -- ./my-game
+npm --prefix <this-skill-dir> run create:game -- ./my-runner --genre runner
 cd ./my-game
 npm install
 npm run setup:browsers
@@ -363,6 +397,16 @@ After every meaningful change:
 - Prove render work with a nonblank canvas and an active-state capture.
 - Report browser, mobile, WebGPU, XR, audio, performance, visual, and bot checks
   that were not run.
+
+For release or broad completion claims, prefer the unified ship check:
+
+```bash
+npm --prefix <this-skill-dir> run ship-check -- /path/to/game
+```
+
+Use `--skip-canvas` only when the local preview cannot run; report that skip.
+Pass `--premium` / `--polished` through to the report auditor when those claims
+are made.
 
 Broad work additionally requires the design contract, phase ledger, content
 plan, controls, objective/fail-retry evidence, renderer revision/backend,

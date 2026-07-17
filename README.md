@@ -34,6 +34,10 @@ quality claims.
 - A runnable Vite + TypeScript mini-game scaffold with desktop/touch controls,
   procedural audio, pause/retry/win/fail states, diagnostics, Playwright tests,
   explicit teardown, and a compile-checked optional WebGPU renderer adapter.
+- Genre overlays (`arena` default, plus `runner`, `shooter`, `platformer`) via
+  `create:game -- --genre`.
+- Load budgets, upgrade/networking boundary manuals, golden evals, asset audit,
+  and a unified `ship-check` release pipeline.
 
 This skill targets **Three.js r185 and onwards**. Greenfield installs should use
 current npm latest (`npm install three`); always verify APIs against the
@@ -62,6 +66,7 @@ game through npm:
 ```bash
 npm install
 npm run create:game -- ./my-game
+npm run create:game -- ./my-runner --genre runner
 cd ./my-game
 npm install
 npm run setup:browsers
@@ -81,6 +86,8 @@ npm --prefix assets/threejs-vite-game install
 npm --prefix assets/threejs-vite-game run setup:browsers
 npm --prefix assets/threejs-vite-game run build
 npm --prefix assets/threejs-vite-game test
+npm run ship-check -- assets/threejs-vite-game --skip-canvas
+npm run audit:assets -- scripts/fixtures
 ```
 
 For a generated game, stop `npm run dev` with <kbd>Ctrl</kbd>+<kbd>C</kbd>

@@ -29,9 +29,19 @@ Do not silently replace a complete game with a vertical slice. If scope is too
 large, reduce the number of mechanics, levels, enemies, or art families while
 preserving a real beginning, escalation, ending, and replay/retry flow.
 
+### Ledger ceremony by scope
+
+- **Focused / mechanic slice:** do **not** keep full design, content, or
+  performance ledgers. Load the owning tech ref + `quickref.md` +
+  `qa-release.md` per `load-budgets.md`. Reproduce → fix → proportionate QA.
+- **Broad / complete / premium / release:** keep the fact/decision, phase,
+  content, and verification ledgers below. Load refs from `load-budgets.md`
+  before opening every manual.
+
 ## Coordinator Records
 
 Keep the records lightweight but explicit. Update them as evidence changes.
+Skip this section for focused fixes.
 
 ### Fact and decision ledger
 
