@@ -14,6 +14,8 @@ Use this before calling a Three.js browser game complete, premium, release-ready
 Minimum meaningful QA:
 
 - Dependencies installed or known.
+- `npm run setup:browsers` completed on fresh machines before Playwright or
+  canvas-inspector checks.
 - Installed `three` package version, `THREE.REVISION`, renderer class, and actual
   backend captured; live-doc examples are not assumed compatible without the
   version gate in `official-docs.md`.

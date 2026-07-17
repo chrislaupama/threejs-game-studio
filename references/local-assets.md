@@ -284,7 +284,7 @@ when local source files are absent.
 Run:
 
 ```bash
-python3 <skill-dir>/scripts/audit_local_only.py .
+npm run audit:local
 ```
 
 Also verify:

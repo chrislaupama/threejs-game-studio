@@ -1,0 +1,29 @@
+{
+  "name": "threejs-game-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "scripts": {
+    "create:game": "node --import tsx scripts/create-threejs-game.ts",
+    "audit:report": "node --import tsx scripts/audit-game-report.ts",
+    "audit:project-local": "node --import tsx scripts/audit-local-only.ts",
+    "audit:structure": "node --import tsx scripts/audit-skill-structure.ts .",
+    "audit:skill-local": "node --import tsx scripts/audit-skill-local-only.ts .",
+    "inspect:canvas": "node --import tsx scripts/inspect-threejs-canvas.ts",
+    "setup:browsers": "playwright install chromium",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx scripts/run-tests.ts",
+    "verify": "npm run typecheck && npm test && npm run audit:structure && npm run audit:skill-local"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@types/node": "^25.9.0",
+    "@types/pngjs": "^6.0.5",
+    "pngjs": "^7.0.0",
+    "tsx": "^4.23.1",
+    "typescript": "^6.0.3"
+  }
+}

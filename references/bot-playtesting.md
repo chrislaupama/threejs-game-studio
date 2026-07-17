@@ -8,6 +8,8 @@ quality claim.
 
 ## Prerequisites
 
+- Run `npm run setup:browsers` once on a fresh machine so the project-local
+  Playwright version has its matching Chromium binary.
 - `window.__THREE_GAME_DIAGNOSTICS__` publishing frame, score/objective, complete/fail state, and player position every update.
 - `window.__THREE_GAME_TEST_HOOKS__` with at least `seed()` and `setState()` so runs are reproducible (scaffold games ship both).
 - All gameplay randomness routed through the seeded RNG — otherwise bot metrics are noise.

@@ -1,18 +1,46 @@
 #!/usr/bin/env node
-import { chromium, devices } from '@playwright/test';
+import { chromium, devices, type Page } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { PNG } from 'pngjs';
 
 // Starting-point render budgets (see references/technical-art.md in the skill).
 // Over-budget rows are reported, not fatal.
-const RENDER_BUDGETS = {
+type RenderMode = 'desktop' | 'mobile';
+
+interface InspectorArguments {
+  url: string;
+  out: string;
+  mobile: boolean;
+  wait: number;
+  state: string | null;
+  seed?: number;
+}
+
+interface RendererDiagnostics {
+  calls: number;
+  triangles: number;
+  geometries: number;
+  textures: number;
+}
+
+interface ThreeGameTestHooks {
+  seed?(value: number): void;
+  setState?(state: string): void;
+}
+
+interface InspectorGameWindow {
+  __THREE_GAME_DIAGNOSTICS__?: { renderer?: RendererDiagnostics };
+  __THREE_GAME_TEST_HOOKS__?: ThreeGameTestHooks;
+}
+
+const RENDER_BUDGETS: Record<RenderMode, Record<keyof RendererDiagnostics, number>> = {
   desktop: { calls: 300, triangles: 750_000, geometries: 300, textures: 60 },
   mobile: { calls: 150, triangles: 300_000, geometries: 200, textures: 40 },
 };
 
-function parseArgs(argv) {
-  const args = {
+function parseArgs(argv: string[]): InspectorArguments {
+  const args: InspectorArguments = {
     url: 'http://127.0.0.1:5188',
     out: 'artifacts/canvas-inspection',
     mobile: false,
@@ -31,7 +59,7 @@ function parseArgs(argv) {
     else if (value === '--seed') args.seed = Number(argv[++i]);
     else if (value === '-h' || value === '--help') {
       console.log(
-        'Usage: inspect-threejs-canvas.mjs [--url URL] [--out DIR] [--mobile] [--wait MS] [--state NAME] [--seed N]\n' +
+        'Usage: inspect-threejs-canvas.ts [--url URL] [--out DIR] [--mobile] [--wait MS] [--state NAME] [--seed N]\n' +
           '  --state/--seed drive window.__THREE_GAME_TEST_HOOKS__ (setState/seed) before capture\n' +
           '  so specific game states can be measured deterministically.',
       );
@@ -44,7 +72,7 @@ function parseArgs(argv) {
   return args;
 }
 
-function assertLocalUrl(value) {
+function assertLocalUrl(value: string): void {
   const url = new URL(value);
   const loopback = ['127.0.0.1', 'localhost', '::1'].includes(url.hostname);
   if (url.protocol !== 'file:' && !loopback) {
@@ -52,17 +80,17 @@ function assertLocalUrl(value) {
   }
 }
 
-function isAllowedRequestUrl(value) {
+function isAllowedRequestUrl(value: string): boolean {
   const url = new URL(value);
   if (['about:', 'blob:', 'data:', 'file:'].includes(url.protocol)) return true;
   return ['127.0.0.1', 'localhost', '::1'].includes(url.hostname);
 }
 
-const round = (value, digits) => Number(value.toFixed(digits));
+const round = (value: number, digits: number): number => Number(value.toFixed(digits));
 
 // Objective pixel statistics used as "Measured Evidence" in the visual
 // scorecard. Computed on a coarse luminance grid so cost stays trivial.
-function computePixelMetrics(png) {
+function computePixelMetrics(png: PNG) {
   const stepX = Math.max(1, Math.floor(png.width / 160));
   const stepY = Math.max(1, Math.floor(png.height / 90));
   const cols = Math.floor(png.width / stepX);
@@ -124,10 +152,15 @@ function computePixelMetrics(png) {
   };
 }
 
-function checkRenderBudget(renderer, mode) {
+function checkRenderBudget(
+  renderer: RendererDiagnostics | null,
+  mode: RenderMode,
+) {
   if (!renderer) return null;
   const budget = RENDER_BUDGETS[mode];
-  const rows = Object.entries(budget).map(([metric, limit]) => {
+  const rows = (Object.entries(budget) as Array<
+    [keyof RendererDiagnostics, number]
+  >).map(([metric, limit]) => {
     const actual = renderer[metric];
     return {
       metric,
@@ -147,7 +180,7 @@ function checkRenderBudget(renderer, mode) {
   };
 }
 
-async function sampleCanvas(page, mode) {
+async function sampleCanvas(page: Page, mode: RenderMode) {
   const locator = page.locator('canvas').first();
   const rect = await locator.boundingBox();
   if (!rect || rect.width < 32 || rect.height < 32) {
@@ -177,11 +210,12 @@ async function sampleCanvas(page, mode) {
   const variance = max - min;
   const diagnostics = await page.evaluate(() => {
     const canvas = document.querySelector('canvas');
+    const gameWindow = window as unknown as InspectorGameWindow;
     return {
       drawingBuffer: canvas
         ? { width: canvas.width, height: canvas.height }
         : null,
-      game: window.__THREE_GAME_DIAGNOSTICS__ ?? null,
+      game: gameWindow.__THREE_GAME_DIAGNOSTICS__ ?? null,
     };
   });
 
@@ -200,9 +234,10 @@ async function sampleCanvas(page, mode) {
   };
 }
 
-async function main() {
+async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   assertLocalUrl(args.url);
+  args.out = path.resolve(process.env.INIT_CWD ?? process.cwd(), args.out);
   await mkdir(args.out, { recursive: true });
 
   const browser = await chromium.launch(
@@ -211,7 +246,7 @@ async function main() {
   const context = await browser.newContext(args.mobile
     ? { ...devices['iPhone 13'], userAgent: undefined, serviceWorkers: 'block' }
     : { viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1, serviceWorkers: 'block' });
-  const outboundRequests = [];
+  const outboundRequests: Array<{ url: string; resourceType: string }> = [];
   await context.route('**/*', async (route) => {
     const requestUrl = route.request().url();
     if (isAllowedRequestUrl(requestUrl)) {
@@ -222,8 +257,8 @@ async function main() {
     await route.abort('blockedbyclient');
   });
   const page = await context.newPage();
-  const consoleErrors = [];
-  const pageErrors = [];
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
 
   page.on('console', (message) => {
     if (message.type() === 'error') consoleErrors.push(message.text());
@@ -240,7 +275,8 @@ async function main() {
 
   if (args.state || args.seed !== undefined) {
     const applied = await page.evaluate(({ seed, state }) => {
-      const hooks = window.__THREE_GAME_TEST_HOOKS__;
+      const hooks = (window as unknown as InspectorGameWindow)
+        .__THREE_GAME_TEST_HOOKS__;
       if (!hooks) return false;
       if (typeof seed === 'number') hooks.seed?.(seed);
       if (state) hooks.setState?.(state);

@@ -70,7 +70,7 @@ premium, showcase, or release-ready.
 - Every meaningful runtime asset is procedural, project-local, or user-supplied.
 - Broad work has a reviewed content-provenance inventory; static path checks are
   not treated as proof of how a local file was obtained.
-- `scripts/audit_local_only.py` passes with no unapproved runtime package or network
+- `npm run audit:local` passes with no unapproved runtime package or network
   source.
 - No remote fonts, models, textures, audio, scripts, APIs, MCP tools, analytics,
   or cloud runtimes are required.

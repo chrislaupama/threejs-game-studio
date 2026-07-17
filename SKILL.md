@@ -96,7 +96,9 @@ Keep generated games self-contained by default:
 
 For imported local content, read `references/local-assets.md` and record source,
 ownership/license, runtime path, scale, axes, bounds, clips, texture cost, and
-disposal ownership. Run `scripts/audit_local_only.py <project>` before release.
+disposal ownership. Run
+`npm --prefix <this-skill-dir> run audit:project-local -- <project>` before
+release.
 
 ## Choose Delivery And Scope
 
@@ -323,9 +325,11 @@ teardown, and a typechecked optional WebGPU renderer adapter for projects that
 select that path.
 
 ```bash
-python3 <this-skill-dir>/scripts/create_threejs_game.py ./my-game
+npm --prefix <this-skill-dir> install
+npm --prefix <this-skill-dir> run create:game -- ./my-game
 cd ./my-game
 npm install
+npm run setup:browsers
 npm run dev
 ```
 
@@ -333,8 +337,8 @@ The generator refuses to overlay a non-empty directory. It copies the complete
 `src/`, `public/`, and `tests/` starter plus `docs/game-report.md`,
 `docs/content-provenance.md`, and local audit/canvas-inspection scripts; it does
 not copy `node_modules`, builds, test results, or caches. Generated commands are
-`npm run dev`, `build`, `preview`, `test`, `verify:visual`, `inspect:canvas`, and
-`audit:local`.
+`npm run dev`, `build`, `preview`, `setup:browsers`, `test`, `verify:visual`,
+`inspect:canvas`, and `audit:local`.
 
 Use it as a production teaching baseline, not a universal game design. Replace
 the arena, objective, entities, tuning, and art direction while preserving
@@ -366,7 +370,7 @@ UI cards, sparse space, or glow-only detail does not pass.
 Copy `assets/game-report.template.md` and audit an ordinary broad report:
 
 ```bash
-python3 <this-skill-dir>/scripts/audit_game_report.py /path/to/report.md
+npm --prefix <this-skill-dir> run audit:report -- /path/to/report.md
 ```
 
 Use exactly one of `--polished`, `--premium`, or `--showcase` when that claim is

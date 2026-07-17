@@ -634,7 +634,7 @@ For r185.1 WebGPU code:
 - never combine this renderer with GLSL `ShaderMaterial`, `RawShaderMaterial`,
   `onBeforeCompile()`, or `EffectComposer`
 
-Run `scripts/audit_skill_structure.py` when changing this skill: it scans
+Run `npm run audit:structure` when changing this skill: it scans
 executable Markdown examples and scaffold TypeScript for the curated r185.1
 deprecated API set and renderer-family mixing.
 

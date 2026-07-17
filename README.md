@@ -1,5 +1,7 @@
 # Three.js Game Studio
 
+![Three.js Game Studio — build complete WebGL and WebGPU browser games](assets/readme-header.png)
+
 A single, self-contained AI skill for planning, building, polishing, debugging,
 optimizing, testing, and releasing complete browser games with Three.js.
 
@@ -49,17 +51,16 @@ and the official migration guide before changing an existing project.
   explicit teardown, and a compile-checked optional WebGPU renderer adapter.
 
 Operational guidance lives in `SKILL.md` and `references/`. Reusable project
-templates and the starter game live in `assets/`; validation and scaffold tools
-live in `scripts/`.
+templates and the starter game live in `assets/`; npm-driven TypeScript
+validation and scaffold tools live in `scripts/`.
 
-## Install locally
+## Install
 
-Copy or clone this repository so `SKILL.md` remains at the skill root, then add
-that local directory with the Skills CLI or copy it into your local Codex skills
-directory.
+Install directly from
+[chrislaupama/threejs-game-studio](https://github.com/chrislaupama/threejs-game-studio):
 
 ```bash
-npx skills add /absolute/path/to/threejs-game-studio
+npx skills add chrislaupama/threejs-game-studio
 ```
 
 Start a new task and invoke `$threejs-game-studio`, or ask to build, upgrade,
@@ -67,10 +68,15 @@ debug, optimize, teach, or release a Three.js game.
 
 ## Create the starter game
 
+From a repository checkout, install the TypeScript tooling once and create a
+game through npm:
+
 ```bash
-python3 scripts/create_threejs_game.py ./my-game
+npm install
+npm run create:game -- ./my-game
 cd ./my-game
 npm install
+npm run setup:browsers
 npm run dev
 ```
 
@@ -81,17 +87,33 @@ while preserving useful ownership and verification seams.
 ## Validate this package
 
 ```bash
-python3 -m unittest discover -s scripts -p 'test_*.py'
-python3 scripts/audit_skill_structure.py .
-python3 scripts/audit_skill_local_only.py .
-cd assets/threejs-vite-game
 npm install
-npm run build
-npm run test
+npm run verify
+npm --prefix assets/threejs-vite-game install
+npm --prefix assets/threejs-vite-game run setup:browsers
+npm --prefix assets/threejs-vite-game run build
+npm --prefix assets/threejs-vite-game test
 ```
 
-Before releasing a generated game, also run its `npm run audit:local`, production
-preview, canvas inspection, and applicable browser/mobile checks.
+For a generated game, stop `npm run dev` with <kbd>Ctrl</kbd>+<kbd>C</kbd>
+before running its tests—the Playwright suite owns its loopback server. Validate
+the generated project with:
+
+```bash
+npm run setup:browsers
+npm run build
+npm test
+npm run audit:local
+npm run preview
+```
+
+Leave preview running and inspect it from a second terminal. Development and
+preview intentionally share port `5188`, so the inspector needs no URL flag:
+
+```bash
+npm run inspect:canvas
+npm run inspect:canvas -- --mobile
+```
 
 ## Documentation sources and attribution
 
