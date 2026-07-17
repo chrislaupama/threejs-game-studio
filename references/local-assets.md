@@ -52,18 +52,37 @@ file arrived; review that inventory before accepting the local-only claim.
 
 ## Asset Catalog
 
+Vite root-absolute strings such as `/assets/hero.glb` bypass the configured
+deployment base. For files intentionally stored under `public/`, resolve a
+project-relative path through `import.meta.env.BASE_URL`:
+
+```ts
+export function publicAssetUrl(relativePath: string): string {
+  const localPath = relativePath.replace(/^\/+/, '');
+  if (!localPath || /^[a-z][a-z\d+.-]*:/i.test(localPath)) {
+    throw new Error(`Expected a project-local public asset path: ${relativePath}`);
+  }
+  return `${import.meta.env.BASE_URL}${localPath}`;
+}
+```
+
+For assets kept inside `src/`, prefer a static import such as
+`import heroUrl from './hero.glb?url'`; Vite fingerprints and rewrites it. Keep
+decoder/WASM directories together and resolve their public base with the same
+helper. Test the production preview under the real `base`, not only `/`.
+
 For imported local files, keep a typed project-owned catalog:
 
 ```ts
 export const assets = {
   hero: {
-    modelUrl: '/assets/models/hero.glb',
+    modelUrl: publicAssetUrl('assets/models/hero.glb'),
     scale: 1,
     forward: '+z',
     up: '+y',
   },
   pickup: {
-    textureUrl: '/assets/textures/pickup.png',
+    textureUrl: publicAssetUrl('assets/textures/pickup.png'),
   },
 } as const;
 ```
@@ -106,6 +125,57 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const loader = new GLTFLoader();
 
+function disposeOwnedActorResources(root: THREE.Object3D) {
+  const geometries = new Set<THREE.BufferGeometry>();
+  const materials = new Set<THREE.Material>();
+  const textures = new Set<THREE.Texture>();
+  const skeletons = new Set<THREE.Skeleton>();
+  const imageBitmaps = new Set<ImageBitmap>();
+
+  root.traverse((object) => {
+    const renderable = object as THREE.Object3D & {
+      geometry?: THREE.BufferGeometry;
+      material?: THREE.Material | THREE.Material[];
+      skeleton?: THREE.Skeleton;
+    };
+    if (renderable.geometry?.isBufferGeometry) {
+      geometries.add(renderable.geometry);
+    }
+    if (renderable.skeleton instanceof THREE.Skeleton) {
+      skeletons.add(renderable.skeleton);
+    }
+    const ownedMaterials = Array.isArray(renderable.material)
+      ? renderable.material
+      : renderable.material
+        ? [renderable.material]
+        : [];
+    for (const material of ownedMaterials) materials.add(material);
+  });
+
+  for (const material of materials) {
+    for (const value of Object.values(material)) {
+      if (value && (value as THREE.Texture).isTexture) {
+        textures.add(value as THREE.Texture);
+      }
+    }
+  }
+  for (const texture of textures) {
+    texture.dispose();
+    const sourceData: unknown = texture.source.data;
+    if (
+      typeof ImageBitmap !== 'undefined' &&
+      sourceData instanceof ImageBitmap
+    ) {
+      imageBitmaps.add(sourceData);
+    }
+  }
+  for (const imageBitmap of imageBitmaps) imageBitmap.close();
+  for (const skeleton of skeletons) skeleton.dispose();
+  for (const material of materials) material.dispose();
+  for (const geometry of geometries) geometry.dispose();
+  root.removeFromParent();
+}
+
 export async function loadLocalActor(url: string) {
   const gltf = await loader.loadAsync(url);
   const wrapper = new THREE.Group();
@@ -141,11 +211,17 @@ export async function loadLocalActor(url: string) {
       mixer?.stopAllAction();
       mixer?.uncacheRoot(gltf.scene);
       currentAction = undefined;
-      // Dispose through the project's shared scene/material/texture disposer.
+      disposeOwnedActorResources(wrapper);
     },
   };
 }
 ```
+
+This implementation assumes one actor owner owns the loaded GPU resources. If
+instances borrow geometry/materials/textures from a cache, replace direct
+disposal with a reference-counted cache release; never let one borrower free
+resources still used by another. Register textures hidden in shader uniforms
+or node graphs explicitly because shallow material inspection cannot find them.
 
 - Map source clip names to gameplay semantics (`idle`, `move`, `attack`,
   `hurt`, `defeat`) in the asset catalog. Do not make game rules depend on

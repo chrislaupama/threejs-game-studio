@@ -23,6 +23,9 @@ read, or casting poor shadows. Also use it when adding an HDR environment,
 choosing a light type, fitting a shadow camera, building a day/night rig,
 reducing shadow cost, or replacing expensive lights with authored cues.
 
+Asset-loading examples use the project-owned `publicAssetUrl()` helper from
+`local-assets.md`; import it from the local asset boundary in real code.
+
 Start with the fewest roles that explain the scene:
 
 | Need | Prefer |
@@ -71,7 +74,7 @@ export async function installLighting(
   renderer: THREE.WebGLRenderer,
 ) {
   const environment = await new HDRLoader().loadAsync(
-    '/assets/environments/studio-1k.hdr',
+    publicAssetUrl('assets/environments/studio-1k.hdr'),
   );
   environment.mapping = THREE.EquirectangularReflectionMapping;
   scene.environment = environment;
@@ -147,13 +150,16 @@ silently compensate for another.
 
 ## HDR Environment Lighting
 
-Use `HDRLoader` for local RGBE `.hdr` files in r185. Do not use the removed
-`RGBELoader` name and do not label HDR radiance as sRGB.
+Use `HDRLoader` for local RGBE `.hdr` files in r185. `RGBELoader` still ships
+only as a deprecated compatibility alias, so do not use it in new code. Do not
+label HDR radiance as sRGB.
 
 ```ts
 import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 
-const hdr = await new HDRLoader().loadAsync('/assets/env/dusk-1k.hdr');
+const hdr = await new HDRLoader().loadAsync(
+  publicAssetUrl('assets/env/dusk-1k.hdr'),
+);
 hdr.mapping = THREE.EquirectangularReflectionMapping;
 
 scene.environment = hdr;

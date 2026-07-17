@@ -17,9 +17,12 @@ Target `three@0.185.1`. Keep shader source, textures, lookup data, and generated
 noise modules in the project. Never load shader strings, textures, presets, or
 post-processing code from a runtime URL.
 
+Texture-loading examples use the project-owned `publicAssetUrl()` helper from
+`local-assets.md`; import it from the local asset boundary in real code.
+
 ## Choose The Path Before Writing Code
 
-Do not mix renderer families.
+Use one primary renderer family per production path.
 
 | Renderer | Supported customization | Supported post stack |
 | --- | --- | --- |
@@ -31,6 +34,12 @@ states that `ShaderMaterial`, `RawShaderMaterial`, `onBeforeCompile`, and
 `EffectComposer` are not supported by `WebGPURenderer`. Port those features to
 node materials and TSL; do not add renderer checks around an incompatible
 material and hope it degrades.
+
+r185 has one narrow bridge in the other direction: a separate
+`WebGLRenderer` can compile supported node materials after installing
+`WebGLNodesHandler`, and can run supported effects through `setEffects()`.
+Use it only as the measured migration aid described in `rendering.md`; it does
+not make `RenderPipeline` valid on WebGL or GLSL valid on WebGPURenderer.
 
 Prefer built-in materials first. Add custom shader logic only when it creates a
 visible gameplay read, art-direction feature, or measured performance win that
@@ -112,12 +121,12 @@ still own how values are composed and output.
 
 ```ts
 const colorMap = await new THREE.TextureLoader().loadAsync(
-  '/assets/textures/energy-color.webp',
+  publicAssetUrl('assets/textures/energy-color.webp'),
 );
 colorMap.colorSpace = THREE.SRGBColorSpace;
 
 const dataMap = await new THREE.TextureLoader().loadAsync(
-  '/assets/textures/energy-mask.webp',
+  publicAssetUrl('assets/textures/energy-mask.webp'),
 );
 dataMap.colorSpace = THREE.NoColorSpace;
 
@@ -203,13 +212,15 @@ const rimMaterial = new THREE.MeshStandardMaterial({
 });
 
 const RIM_PROGRAM_KEY = 'player-rim-r185-v1';
+const rimColor = { value: new THREE.Color(0x25d9ff) };
+const rimPower = { value: 3.0 };
+const rimStrength = { value: 1.25 };
 
 rimMaterial.onBeforeCompile = (shader) => {
-  shader.uniforms.uRimColor = { value: new THREE.Color(0x25d9ff) };
-  shader.uniforms.uRimPower = { value: 3.0 };
-  shader.uniforms.uRimStrength = { value: 1.25 };
-
-  rimMaterial.userData.shader = shader;
+  // Reuse the same holders across every compiled material variant.
+  shader.uniforms.uRimColor = rimColor;
+  shader.uniforms.uRimPower = rimPower;
+  shader.uniforms.uRimStrength = rimStrength;
 
   const marker = '#include <emissivemap_fragment>';
   if (!shader.fragmentShader.includes(marker)) {
@@ -239,12 +250,11 @@ rimMaterial.customProgramCacheKey = () => RIM_PROGRAM_KEY;
 rimMaterial.needsUpdate = true;
 ```
 
-Update a captured uniform without recompiling:
+Update the shared uniform without recompiling every program variant:
 
 ```ts
 function setRimStrength(value: number) {
-  const shader = rimMaterial.userData.shader;
-  if (shader) shader.uniforms.uRimStrength.value = value;
+  rimStrength.value = value;
 }
 ```
 
@@ -252,8 +262,8 @@ Rules:
 
 - Set `customProgramCacheKey()` to a stable key unique to the injected program.
 - Fail loudly when the expected chunk marker is absent.
-- Capture the compiled shader only for uniform updates; do not assume it exists
-  before the first compile.
+- Reuse shared uniform holders across every program variant; one material can
+  compile separate fog, clipping, skinning, morphing, or instancing programs.
 - Set `needsUpdate = true` only when defines or program structure change, not
   for ordinary uniform values.
 - Test shadows, fog, skinning, morphs, instancing, clipping, and all material
@@ -313,13 +323,15 @@ import * as THREE from 'three/webgpu';
 import { color, mix, texture, time, uniform, uv } from 'three/tsl';
 
 const renderer = new THREE.WebGPURenderer({ antialias: true });
-renderer.setAnimationLoop(render);
+await renderer.init();
+await renderer.setAnimationLoop(render);
 ```
 
-`setAnimationLoop()` ensures asynchronous renderer initialization before the
-first frame. If renderer methods are needed during setup, call
-`await renderer.init()` first. Use current synchronous `render()` and
-`compute()` methods afterward.
+`setAnimationLoop()` can initialize asynchronously, but handling
+`await renderer.init()` at the boot boundary makes failure explicit before UI
+and GPU-dependent setup continue. Use current synchronous `render()` and
+`compute()` methods afterward. Catch initialization failure in the app shell
+and show an accessible retry or renderer-choice message.
 
 Build a current node material:
 
@@ -376,10 +388,20 @@ const scenePass = pass(scene, camera);
 
 pipeline.outputNode = scenePass;
 
-renderer.setAnimationLoop(() => {
-  pipeline.render();
+await renderer.setAnimationLoop(() => {
+  if (renderer.xr.isPresenting) {
+    renderer.render(scene, camera);
+  } else {
+    pipeline.render();
+  }
 });
 ```
+
+In r185, `RenderPipeline.render()` temporarily disables XR while rendering.
+Use the pipeline for desktop/non-XR presentation, but call
+`renderer.render(scene, camera)` directly whenever `renderer.xr.isPresenting`.
+That deliberately disables the desktop post chain in-headset; use an alternate
+XR post path only after exact-version, on-device verification.
 
 For a current bloom composition:
 
@@ -422,12 +444,17 @@ let lastWidth = 0;
 let lastHeight = 0;
 let lastDpr = 0;
 const MAX_DPR = 1.5;
+const MAX_DRAWING_BUFFER_PIXELS = 1920 * 1080;
 
 function resizeWebGpuFrame() {
   const canvas = renderer.domElement;
   const width = Math.max(1, Math.floor(canvas.clientWidth));
   const height = Math.max(1, Math.floor(canvas.clientHeight));
-  const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
+  const requestedDpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
+  const budgetDpr = Math.sqrt(
+    MAX_DRAWING_BUFFER_PIXELS / (width * height),
+  );
+  const dpr = Math.min(requestedDpr, budgetDpr);
   if (width === lastWidth && height === lastHeight && dpr === lastDpr) return;
 
   lastWidth = width;
@@ -439,9 +466,13 @@ function resizeWebGpuFrame() {
   camera.updateProjectionMatrix();
 }
 
-renderer.setAnimationLoop(() => {
+await renderer.setAnimationLoop(() => {
   resizeWebGpuFrame();
-  pipeline.render();
+  if (renderer.xr.isPresenting) {
+    renderer.render(scene, camera);
+  } else {
+    pipeline.render();
+  }
 });
 ```
 
@@ -451,7 +482,7 @@ must also be disposed explicitly:
 
 ```ts
 function disposeWebGpuRendering() {
-  renderer.setAnimationLoop(null);
+  void renderer.setAnimationLoop(null);
   pipeline.dispose();
   // r185 runtime BloomNode has dispose(), while @types/three@0.185.1 omits it.
   if ('dispose' in glow && typeof glow.dispose === 'function') glow.dispose();

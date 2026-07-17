@@ -17,25 +17,78 @@ Keep all runtime modules, textures, environments, and decoder files local.
 Official links in this reference document API intent; they are not runtime
 dependencies.
 
+Asset-loading examples use the project-owned `publicAssetUrl()` helper from
+`local-assets.md`; import it from the local asset boundary in real code.
+
 ## Renderer Decision
 
-Use [WebGLRenderer](https://threejs.org/docs/pages/WebGLRenderer.html) as the
-default for production WebGL 2 games, current addon passes, and GLSL materials.
-WebGL 1 is not supported.
+Use [WebGLRenderer](https://threejs.org/docs/pages/WebGLRenderer.html) for the
+mature WebGL 2 path, existing addon passes, GLSL materials, and broad
+compatibility. WebGL 1 is not supported.
 
-Choose [WebGPURenderer](https://threejs.org/docs/pages/WebGPURenderer.html) only
-when node materials, TSL post-processing, compute, or a measured WebGPU feature
-justifies its experimental status. It uses WebGPU when available and can fall
-back to WebGL 2. Read the official
-[WebGPURenderer guide](https://threejs.org/manual/en/webgpurenderer) before
-choosing it.
+For a graphics-heavy or compute-heavy 3D site/game, always present
+[WebGPURenderer](https://threejs.org/docs/pages/WebGPURenderer.html) as a
+first-class option and recommend evaluating it first when the project benefits
+from TSL, GPU compute, node post-processing, many-light clustered rendering, or
+a modern renderer architecture. It uses WebGPU when available and can fall
+back to a WebGL 2 backend. It remains experimental and is not guaranteed to
+outperform `WebGLRenderer`, so the recommendation must include a representative
+benchmark and fallback plan. Read the official
+[WebGPURenderer guide](https://threejs.org/manual/en/webgpurenderer) and the
+dedicated `webgpu.md` reference before choosing it.
 
-Never mix these customization stacks:
+Classify the workload before asking for a renderer decision:
+
+| Workload evidence | Initial recommendation |
+| --- | --- |
+| Existing GLSL/onBeforeCompile/EffectComposer stack, broad legacy browser/device target, or simple teaching scene | `WebGLRenderer` |
+| GPU compute, TSL-first materials/node post, or a measured many-point-light case suited to clustered lighting | Offer and lean toward `WebGPURenderer`, then benchmark |
+| Many ordinary meshes or effects without a renderer-specific need | Offer both and benchmark both; optimize instancing/batching, LOD, culling, assets, overdraw, and post cost first |
+| Uncertain target or no representative scene yet | Start with renderer-agnostic game state and a small WebGPU/WebGL spike before material/post architecture hardens |
+
+Use these as the primary production stacks:
 
 | Renderer | Custom material | Post-processing |
 | --- | --- | --- |
 | `WebGLRenderer` | GLSL `ShaderMaterial`, `RawShaderMaterial`, `onBeforeCompile` | `EffectComposer` and addon passes |
 | `WebGPURenderer` | Node materials and TSL | `RenderPipeline` and TSL nodes |
+
+r185 also provides a limited **WebGL migration bridge**. `WebGLRenderer` can
+compile supported node materials after `setNodesHandler(new
+WebGLNodesHandler())`, and `setEffects()` can host supported effect objects.
+This helps stage a future WebGPU port; it does not turn `WebGLRenderer` into a
+`RenderPipeline` renderer, and it does not make WebGL-only GLSL compatible with
+`WebGPURenderer`. Validate every node/effect used on the exact fallback devices.
+
+The installed r185 `WebGLNodesHandler` explicitly does not support VSM shadows,
+MRT, transmission, the WebGPU post stack, or storage textures. Fog/environment
+changes require material disposal/rebuild; instanced geometry cannot be shared;
+and node materials are not supported by `renderer.compile()`. Treat these as
+hard bridge constraints until the exact installed source proves otherwise.
+
+```ts
+import * as THREE from 'three';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { WebGLNodesHandler } from 'three/addons/tsl/WebGLNodesHandler.js';
+
+const renderer = new THREE.WebGLRenderer({
+  canvas,
+  antialias: false,
+  outputBufferType: THREE.HalfFloatType,
+});
+renderer.setNodesHandler(new WebGLNodesHandler());
+
+const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.45, 0.3, 0.9);
+renderer.setEffects([bloom]);
+
+// setEffects applies tone mapping/output conversion; do not add OutputPass.
+renderer.setAnimationLoop(() => renderer.render(scene, camera));
+```
+
+`setEffects()` requires `HalfFloatType` or `FloatType` output buffers. Retain
+and dispose each effect you create, then clear the renderer's reference with
+`renderer.setEffects(null)` during teardown. Treat this bridge as a measured
+migration aid, not a reason to combine every renderer architecture.
 
 Declare what **WebGL fallback** means; two different architectures use that
 phrase:
@@ -49,9 +102,11 @@ phrase:
    pass stack compatible.
 
 Choose the backend at boot and reload when the player changes it. Do not hot
-swap live GPU state. Record the renderer class and actual backend separately in
-diagnostics, and exercise native WebGPU, `forceWebGL: true`, and the preserved
-`WebGLRenderer` path only when each is genuinely claimed.
+swap live GPU state. Record the renderer class and actual backend separately
+after initialization, and exercise native WebGPU, `forceWebGL: true`, and the
+preserved `WebGLRenderer` path only when each is genuinely claimed. A
+`WebGPURenderer` instance that fell back to WebGL 2 is not evidence that native
+WebGPU was tested.
 
 ## WebGL Renderer Baseline
 
@@ -76,7 +131,6 @@ renderer.outputColorSpace = THREE.SRGBColorSpace; // current default, explicit c
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1;
 renderer.setClearColor(0x0b1018, 1);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 ```
 
 Only request `alpha`, `stencil`, logarithmic depth, preserve-drawing-buffer, or
@@ -95,6 +149,11 @@ change. The official [responsive guide](https://threejs.org/manual/en/responsive
 explains CSS pixels versus drawing-buffer pixels.
 
 ```ts
+const composerOutputSizes = new WeakMap<
+  EffectComposer,
+  { width: number; height: number; dpr: number }
+>();
+
 function resizeFrame(
   renderer: THREE.WebGLRenderer,
   camera: THREE.PerspectiveCamera,
@@ -103,24 +162,45 @@ function resizeFrame(
   const canvas = renderer.domElement;
   const width = Math.max(1, canvas.clientWidth);
   const height = Math.max(1, canvas.clientHeight);
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const requestedDpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  const budgetDpr = Math.sqrt((1920 * 1080) / (width * height));
+  const dpr = Math.min(requestedDpr, budgetDpr);
   const bufferWidth = Math.floor(width * dpr);
   const bufferHeight = Math.floor(height * dpr);
 
-  const pixelRatioChanged = renderer.getPixelRatio() !== dpr;
-  if (
-    !pixelRatioChanged &&
-    canvas.width === bufferWidth &&
-    canvas.height === bufferHeight
-  ) return;
+  const rendererChanged =
+    renderer.getPixelRatio() !== dpr ||
+    canvas.width !== bufferWidth ||
+    canvas.height !== bufferHeight;
+  const aspect = width / height;
+  const cameraChanged = camera.aspect !== aspect;
+  const previousComposerSize = composer
+    ? composerOutputSizes.get(composer)
+    : undefined;
+  const composerChanged = Boolean(
+    composer &&
+    (!previousComposerSize ||
+      previousComposerSize.width !== width ||
+      previousComposerSize.height !== height ||
+      previousComposerSize.dpr !== dpr),
+  );
 
-  renderer.setPixelRatio(dpr);
-  renderer.setSize(width, height, false);
-  camera.aspect = width / height;
-  camera.updateProjectionMatrix();
+  if (!rendererChanged && !cameraChanged && !composerChanged) return;
 
-  composer?.setPixelRatio(dpr);
-  composer?.setSize(width, height);
+  if (rendererChanged) {
+    renderer.setPixelRatio(dpr);
+    renderer.setSize(width, height, false);
+  }
+  if (cameraChanged) {
+    camera.aspect = aspect;
+    camera.updateProjectionMatrix();
+  }
+
+  if (composer && composerChanged) {
+    composer.setPixelRatio(dpr);
+    composer.setSize(width, height);
+    composerOutputSizes.set(composer, { width, height, dpr });
+  }
 }
 ```
 
@@ -143,16 +223,24 @@ and [Texture.colorSpace API](https://threejs.org/docs/pages/Texture.html).
 Classify every texture by meaning:
 
 ```ts
-const baseColor = await textureLoader.loadAsync('/assets/textures/hull-color.webp');
+const baseColor = await textureLoader.loadAsync(
+  publicAssetUrl('assets/textures/hull-color.webp'),
+);
 baseColor.colorSpace = THREE.SRGBColorSpace;
 
-const emissive = await textureLoader.loadAsync('/assets/textures/hull-emissive.webp');
+const emissive = await textureLoader.loadAsync(
+  publicAssetUrl('assets/textures/hull-emissive.webp'),
+);
 emissive.colorSpace = THREE.SRGBColorSpace;
 
-const normal = await textureLoader.loadAsync('/assets/textures/hull-normal.webp');
+const normal = await textureLoader.loadAsync(
+  publicAssetUrl('assets/textures/hull-normal.webp'),
+);
 normal.colorSpace = THREE.NoColorSpace;
 
-const roughness = await textureLoader.loadAsync('/assets/textures/hull-roughness.webp');
+const roughness = await textureLoader.loadAsync(
+  publicAssetUrl('assets/textures/hull-roughness.webp'),
+);
 roughness.colorSpace = THREE.NoColorSpace;
 ```
 
@@ -206,8 +294,12 @@ Frame a bounded subject without unexplained distance constants:
 ```ts
 const bounds = new THREE.Box3().setFromObject(subject);
 const sphere = bounds.getBoundingSphere(new THREE.Sphere());
-const halfFov = THREE.MathUtils.degToRad(camera.fov * 0.5);
-const distance = sphere.radius / Math.max(Math.sin(halfFov), 0.01);
+const verticalHalfFov = THREE.MathUtils.degToRad(camera.fov * 0.5);
+const horizontalHalfFov = Math.atan(
+  Math.tan(verticalHalfFov) * Math.max(camera.aspect, 0.01),
+);
+const limitingHalfFov = Math.min(verticalHalfFov, horizontalHalfFov);
+const distance = sphere.radius / Math.max(Math.sin(limitingHalfFov), 0.01);
 const viewDirection = new THREE.Vector3(0.7, 0.45, 1).normalize();
 
 camera.position.copy(sphere.center).addScaledVector(viewDirection, distance * 1.2);
@@ -262,7 +354,9 @@ environment with the current [HDRLoader](https://threejs.org/docs/pages/HDRLoade
 ```ts
 import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 
-const environment = await new HDRLoader().loadAsync('/assets/hdr/arena.hdr');
+const environment = await new HDRLoader().loadAsync(
+  publicAssetUrl('assets/hdr/arena.hdr'),
+);
 environment.mapping = THREE.EquirectangularReflectionMapping;
 scene.environment = environment;
 scene.background = environment;
@@ -365,8 +459,14 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
-const composer = new EffectComposer(renderer);
-composer.addPass(new RenderPass(scene, camera));
+const composerTarget = new THREE.WebGLRenderTarget(1, 1, {
+  type: THREE.HalfFloatType,
+  // Context antialiasing does not antialias this offscreen beauty target.
+  samples: Math.min(4, renderer.capabilities.maxSamples),
+});
+const composer = new EffectComposer(renderer, composerTarget);
+const renderPass = new RenderPass(scene, camera);
+composer.addPass(renderPass);
 
 const bloom = new UnrealBloomPass(
   new THREE.Vector2(1, 1),
@@ -375,7 +475,8 @@ const bloom = new UnrealBloomPass(
   0.9,
 );
 composer.addPass(bloom);
-composer.addPass(new OutputPass());
+const outputPass = new OutputPass();
+composer.addPass(outputPass);
 
 renderer.setAnimationLoop((timestamp) => {
   timer.update(timestamp);
@@ -384,12 +485,28 @@ renderer.setAnimationLoop((timestamp) => {
   resizeFrame(renderer, camera, composer);
   composer.render(delta);
 });
+
+function disposePost() {
+  renderer.setAnimationLoop(null);
+  outputPass.dispose();
+  bloom.dispose();
+  renderPass.dispose();
+  // Owns composerTarget and its internal clone.
+  composer.dispose();
+}
 ```
 
 Keep bloom threshold high enough that authored emissive cues contribute and
 ordinary white surfaces do not wash out the frame. Measure every full-screen
 pass at the actual drawing-buffer resolution. Provide low-quality and no-post
 paths when the target device tier needs them.
+
+When this composer is always active, construct the canvas renderer with
+`antialias: false`; its default-framebuffer MSAA does not help the offscreen
+composer target. Measure multisampled-target cost, or use a compatible
+post-process AA pass in the correct order when MSAA is too expensive. Retain
+and dispose every pass: `EffectComposer.dispose()` releases its ping-pong
+targets and internal copy pass, not arbitrary passes added by the application.
 
 ## WebGPU Post-Processing
 
@@ -402,15 +519,26 @@ import * as THREE from 'three/webgpu';
 import { pass } from 'three/tsl';
 
 const renderer = new THREE.WebGPURenderer({ antialias: true });
+await renderer.init();
 const pipeline = new THREE.RenderPipeline(renderer);
 const scenePass = pass(scene, camera);
 
 pipeline.outputNode = scenePass;
 
-renderer.setAnimationLoop(() => {
-  pipeline.render();
+await renderer.setAnimationLoop(() => {
+  if (renderer.xr.isPresenting) {
+    renderer.render(scene, camera);
+  } else {
+    pipeline.render();
+  }
 });
 ```
+
+This r185 branch is required for an XR-capable game: `RenderPipeline.render()`
+temporarily disables XR while it owns rendering. Treat node post-processing as
+a desktop/non-XR path, render the scene directly while `xr.isPresenting`, and
+tell the player that those effects are disabled in-headset. Only use a
+different XR post path after exact-version, on-device verification.
 
 `RenderPipeline` applies tone mapping and output color conversion by default.
 If an effect such as FXAA specifically needs display-referred input, use
@@ -464,6 +592,38 @@ compile every speculative material variant.
 Test context loss deliberately in a diagnostic route, stop simulation while
 the context is unavailable, and verify resources recover or the game presents
 a clear restart path. Do not use `forceContextLoss()` as ordinary cleanup.
+
+```ts
+const onContextLost = (event: Event) => {
+  event.preventDefault();
+  loop.stop();
+  input.suspend();
+  void audio.suspend();
+  showRendererStatus('Graphics lost; recovery is in progress.');
+};
+
+const onContextRestored = () => {
+  hideRendererStatus();
+  loop.start(); // resets Timer/accumulator in the loop owner
+  void audio.resume();
+};
+
+renderer.domElement.addEventListener('webglcontextlost', onContextLost);
+renderer.domElement.addEventListener('webglcontextrestored', onContextRestored);
+
+function removeContextLifecycle() {
+  renderer.domElement.removeEventListener('webglcontextlost', onContextLost);
+  renderer.domElement.removeEventListener(
+    'webglcontextrestored',
+    onContextRestored,
+  );
+}
+```
+
+The renderer recreates its internal WebGL state on restoration; the application
+still owns simulation timing, held input, audio, loading/UI state, and the
+choice to resume versus show a full restart. Test this path after local assets,
+post targets, shadows, and dynamic resources have been created.
 
 ## Rendering QA
 

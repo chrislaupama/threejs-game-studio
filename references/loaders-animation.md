@@ -27,6 +27,9 @@ animations; showing loading progress; handling missing/corrupt assets;
 configuring glTF compression; creating multiple animated characters; or wiring
 idle/walk/run/action clips into game state.
 
+Loader examples use the project-owned `publicAssetUrl()` helper from
+`local-assets.md`; import it from the local asset boundary in real code.
+
 Use glTF 2.0, normally binary `.glb`, as the default runtime model format.
 Choose compression from measured asset needs:
 
@@ -73,7 +76,9 @@ export async function loadProp(scene: THREE.Scene) {
   const loader = new GLTFLoader();
 
   try {
-    const gltf = await loader.loadAsync('/assets/models/crate.glb');
+    const gltf = await loader.loadAsync(
+      publicAssetUrl('assets/models/crate.glb'),
+    );
     const root = gltf.scene;
     root.name = 'crate-instance';
     scene.add(root);
@@ -179,10 +184,10 @@ export function createModelLoaders(
   manager: THREE.LoadingManager,
 ) {
   const draco = new DRACOLoader(manager)
-    .setDecoderPath('/decoders/draco/gltf/');
+    .setDecoderPath(publicAssetUrl('decoders/draco/gltf/'));
 
   const ktx2 = new KTX2Loader(manager)
-    .setTranscoderPath('/decoders/basis/')
+    .setTranscoderPath(publicAssetUrl('decoders/basis/'))
     .detectSupport(renderer);
 
   const gltf = new GLTFLoader(manager)
@@ -299,7 +304,9 @@ Use `SkeletonUtils.clone()` for a skinned hierarchy:
 ```ts
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 
-const source = await gltfLoader.loadAsync('/assets/models/robot.glb');
+const source = await gltfLoader.loadAsync(
+  publicAssetUrl('assets/models/robot.glb'),
+);
 
 function createRobotInstance() {
   const root = SkeletonUtils.clone(source.scene);
@@ -595,14 +602,22 @@ function disposeModelSource(root: THREE.Object3D) {
   const imageBitmaps = new Set<ImageBitmap>();
 
   root.traverse((object) => {
-    if (object instanceof THREE.SkinnedMesh) {
-      skeletons.add(object.skeleton);
+    const renderable = object as THREE.Object3D & {
+      geometry?: THREE.BufferGeometry;
+      material?: THREE.Material | THREE.Material[];
+      skeleton?: THREE.Skeleton;
+    };
+    if (renderable.skeleton instanceof THREE.Skeleton) {
+      skeletons.add(renderable.skeleton);
     }
-    if (!(object instanceof THREE.Mesh)) return;
-    geometries.add(object.geometry);
-    const list = Array.isArray(object.material)
-      ? object.material
-      : [object.material];
+    if (renderable.geometry?.isBufferGeometry) {
+      geometries.add(renderable.geometry);
+    }
+    const list = Array.isArray(renderable.material)
+      ? renderable.material
+      : renderable.material
+        ? [renderable.material]
+        : [];
     for (const material of list) materials.add(material);
   });
 

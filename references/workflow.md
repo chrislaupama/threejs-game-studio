@@ -39,6 +39,10 @@ Keep the records lightweight but explicit. Update them as evidence changes.
 Three.js installed revision:
 Documentation baseline checked:
 Renderer: WebGLRenderer / WebGPURenderer
+Workload class: compatibility-first / graphics-heavy / compute-heavy
+Renderer options offered to user:
+Renderer recommendation and evidence:
+Actual backend after initialization: WebGL2 / WebGPU / not yet measured
 Post stack: direct / EffectComposer / RenderPipeline
 Target browsers/devices:
 World units and axes:
@@ -146,8 +150,11 @@ Run `npm ls three` and obtain `THREE.REVISION`. For greenfield work, compare
 the current stable npm version when network access exists. For existing work,
 use the installed revision until an upgrade is explicitly in scope.
 
-Choose one renderer path. Do not mix WebGL `ShaderMaterial`/`EffectComposer`
-recipes with WebGPU TSL/`RenderPipeline` recipes.
+Choose one renderer path. For a graphics-heavy or compute-heavy 3D request,
+show the user the WebGPU option, recommend it when the feature/target fit is
+strong, and disclose its experimental status plus fallback boundary. Do not
+mix WebGL `ShaderMaterial`/`EffectComposer` recipes with WebGPU
+TSL/`RenderPipeline` recipes.
 
 Exit evidence: filled fact ledger, current run/build state, known entrypoints,
 highest-risk path, and relevant references selected.
@@ -186,7 +193,8 @@ context, UI bridge, diagnostics and teardown.
 
 Choose and document:
 
-- WebGL or WebGPU, post stack and shader language
+- workload class, the WebGL/WebGPU options offered, chosen renderer, actual
+  backend, fallback contract, post stack, and shader language
 - meters/world units, +Y up, forward convention and imported-model boundary
 - variable presentation time and fixed simulation time where needed
 - explicit state transitions and update order

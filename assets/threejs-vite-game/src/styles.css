@@ -132,6 +132,25 @@ body {
   display: none;
 }
 
+.renderer-status {
+  position: absolute;
+  z-index: 6;
+  left: 50%;
+  bottom: max(24px, env(safe-area-inset-bottom));
+  width: min(620px, calc(100vw - 32px));
+  margin: 0;
+  padding: 14px 18px;
+  border: 1px solid rgba(245, 186, 73, 0.7);
+  color: #f6f1df;
+  background: rgba(17, 19, 18, 0.96);
+  transform: translateX(-50%);
+  text-align: center;
+}
+
+.renderer-status[hidden] {
+  display: none;
+}
+
 #state-kicker {
   margin: 0 0 8px;
   color: #48baa7;

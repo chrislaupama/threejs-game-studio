@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { InputController } from '../core/InputController';
+import { InterpolatedTransform } from '../utils/InterpolatedTransform';
 
 export type PlayerTuning = {
   speed: number;
@@ -32,6 +33,7 @@ export class Player {
   });
   private readonly bodyGeometry = new THREE.CapsuleGeometry(0.38, 0.58, 6, 12);
   private readonly noseGeometry = new THREE.ConeGeometry(0.22, 0.5, 4);
+  private readonly presentation: InterpolatedTransform;
 
   constructor() {
     const body = new THREE.Mesh(this.bodyGeometry, this.bodyMaterial);
@@ -45,9 +47,11 @@ export class Player {
     nose.position.set(0, 0.68, -0.58);
     nose.rotation.x = Math.PI / 2;
     this.group.add(nose);
+    this.presentation = new InterpolatedTransform(this.group);
   }
 
   update(delta: number, elapsed: number, input: InputController, tuning: PlayerTuning, bounds: ArenaBounds): void {
+    this.presentation.beginStep();
     input.readMovement(this.move);
     const dash = input.isDashHeld() ? tuning.dashMultiplier : 1;
     this.targetVelocity.set(this.move.x, 0, this.move.y).multiplyScalar(tuning.speed * dash);
@@ -64,6 +68,22 @@ export class Player {
     }
 
     this.group.position.y = 0.06 + Math.sin(elapsed * 9) * Math.min(this.velocity.length() / 40, 0.08);
+    this.presentation.endStep();
+  }
+
+  reset(): void {
+    this.group.position.set(0, 0.06, 0);
+    this.group.rotation.set(0, 0, 0);
+    this.velocity.set(0, 0, 0);
+    this.presentation.snap();
+  }
+
+  present(alpha: number): void {
+    this.presentation.present(alpha);
+  }
+
+  holdPresentation(): void {
+    this.presentation.hold();
   }
 
   dispose(): void {

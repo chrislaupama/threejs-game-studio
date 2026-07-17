@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 
 const currentSize = new THREE.Vector2();
+const DEFAULT_MAX_DRAWING_BUFFER_PIXELS = 1920 * 1080;
 
 export function createRenderer(canvas: HTMLCanvasElement): THREE.WebGLRenderer {
   const renderer = new THREE.WebGLRenderer({
@@ -20,12 +21,17 @@ export function createRenderer(canvas: HTMLCanvasElement): THREE.WebGLRenderer {
 export function resizeRenderer(
   renderer: THREE.WebGLRenderer,
   camera: THREE.PerspectiveCamera,
-  maxDpr = 2,
+  maxDpr = 1.5,
+  maxDrawingBufferPixels = DEFAULT_MAX_DRAWING_BUFFER_PIXELS,
 ): boolean {
   const canvas = renderer.domElement;
   const width = Math.max(1, Math.floor(canvas.clientWidth));
   const height = Math.max(1, Math.floor(canvas.clientHeight));
-  const dpr = Math.min(window.devicePixelRatio || 1, maxDpr);
+  const requestedDpr = Math.min(window.devicePixelRatio || 1, maxDpr);
+  const budgetDpr = Math.sqrt(
+    Math.max(1, maxDrawingBufferPixels) / Math.max(1, width * height),
+  );
+  const dpr = Math.min(requestedDpr, budgetDpr);
   renderer.getSize(currentSize);
   const needsResize =
     currentSize.x !== width ||

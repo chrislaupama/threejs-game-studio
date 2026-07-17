@@ -93,27 +93,104 @@ Do not use `window.requestAnimationFrame()` as a parallel game loop. One
 
 ## WebGPU XR Setup
 
-Three.js r185 supports `VRButton`/`ARButton` with `WebGPURenderer`, but the
-renderer remains experimental. Keep this as an explicit product choice and
-test the exact headset/browser/backend combination.
+Three.js r185 supports `VRButton`/`ARButton` with `WebGPURenderer`, but native
+WebGPU XR requires the session's `webgpu` feature. The renderer remains
+experimental. Keep this as an explicit product choice and test the exact
+headset/browser/backend combination.
 
 ```ts
 import * as THREE from 'three/webgpu';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 
 const renderer = new THREE.WebGPURenderer({
-  antialias: true,
-  multiview: true,
+  // Native WebGPU XR in r185 disables MSAA and multiview for the XR session.
+  antialias: false,
+  multiview: false,
 });
+
+await renderer.init();
 
 renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
-document.body.appendChild(VRButton.createButton(renderer));
+document.body.appendChild(VRButton.createButton(renderer, {
+  requiredFeatures: ['webgpu'],
+}));
 
-renderer.setAnimationLoop(() => {
+await renderer.setAnimationLoop(() => {
   renderer.render(scene, camera);
 });
 ```
+
+Keep that direct render call while an XR session is presenting. In r185,
+`RenderPipeline.render()` temporarily disables XR, so a desktop TSL/node post
+chain must be bypassed with an `renderer.xr.isPresenting` branch. Resume the
+pipeline after the session ends. Do not promise WebGPU XR post-processing
+unless an alternate path has been verified against the exact installed
+revision and tested on the target headset.
+
+Without the `webgpu` session feature, r185's native WebGPU XR manager rejects
+session setup. If the experience must enter XR on devices whose XR runtime does
+not expose that feature, use the official construction-time
+`setupWebGLXRFallback()` pattern to replace the renderer with a new
+`WebGPURenderer({ forceWebGL: true })` before attaching the session. Request
+`webgpu` as an optional feature for that route and test both outcomes. Do not
+try to mutate the live native renderer into its fallback backend.
+
+```ts
+import * as THREE from 'three/webgpu';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { setupWebGLXRFallback } from
+  'three/addons/webxr/WebGLXRFallback.js';
+
+let renderer = createRenderer(false);
+
+function createRenderer(forceWebGL: boolean) {
+  const next = new THREE.WebGPURenderer({
+    antialias: forceWebGL,
+    forceWebGL,
+    outputBufferType: THREE.UnsignedByteType,
+  });
+  next.xr.enabled = true;
+  next.xr.setReferenceSpaceType('local-floor');
+  next.setSize(window.innerWidth, window.innerHeight);
+  return next;
+}
+
+function installRenderer(
+  next: THREE.WebGPURenderer,
+  previous: THREE.WebGPURenderer | null = null,
+) {
+  if (previous) {
+    previous.domElement.replaceWith(next.domElement);
+    removeControllerBindings(previous);
+    previous.dispose();
+  } else {
+    document.body.append(next.domElement);
+  }
+  renderer = next;
+  rebuildControllerBindings(next);
+}
+
+await renderer.init();
+await renderer.setAnimationLoop(() => renderer.render(scene, camera));
+installRenderer(renderer);
+
+setupWebGLXRFallback(
+  renderer,
+  () => createRenderer(true),
+  installRenderer,
+);
+
+document.body.append(VRButton.createButton(renderer, {
+  optionalFeatures: ['webgpu'],
+}));
+```
+
+The fallback helper forwards the pending session, copies XR settings and the
+animation loop, then calls the installer. The installer must replace the
+canvas and rebuild renderer-owned controllers, grips, listeners, render
+targets, and diagnostics before disposing the previous renderer. Validate this
+transition on-device; a desktop fallback test is insufficient.
 
 `setAnimationLoop()` ensures initialization before the first frame. Call
 `await renderer.init()` first only when setup requires renderer methods before
@@ -122,7 +199,10 @@ that loop. Use node materials and TSL; do not use WebGL `ShaderMaterial`,
 [WebGPURenderer guide](https://threejs.org/manual/en/webgpurenderer).
 
 Verify the WebGPU backend and `forceWebGL: true` fallback separately when both
-are claimed. A desktop WebGPU success does not prove headset-browser support.
+are claimed. Record the XR session's enabled features. A desktop WebGPU success
+does not prove headset-browser support. In r185, native WebGPU XR forces zero
+MSAA samples and disables multiview; do not advertise those options as active
+without a newer installed revision and on-device evidence.
 
 ## Player Rig And World Origin
 

@@ -159,6 +159,12 @@ export class InputController {
     return pressed;
   }
 
+  suspend(): void {
+    this.clearHeldInput();
+    this.pausePressed = false;
+    this.restartPressed = false;
+  }
+
   dispose(): void {
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);

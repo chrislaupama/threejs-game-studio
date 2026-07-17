@@ -16,6 +16,9 @@ Build one understandable scene, one camera, one renderer, and one loop before
 adding systems. Keep browser runtime code and assets local; documentation links
 are citations, never runtime imports.
 
+Asset-loading examples use the project-owned `publicAssetUrl()` helper from
+`local-assets.md`; import it from the local asset boundary in real code.
+
 ## Local Project Baseline
 
 Install and pin the local package:
@@ -221,6 +224,12 @@ function updateGame(deltaSeconds: number) {
 }
 ```
 
+`WebGLRenderer` requires WebGL 2. Catch construction failure at the app shell
+and replace the canvas with an accessible, project-local error/retry surface. A
+blank canvas is not an acceptable unsupported-device state. In a strict
+local-only build, do not copy `WebGL.getWebGL2ErrorMessage()` unchanged: r185's
+default message contains an external help link; write local text instead.
+
 Use `setAnimationLoop()` even when XR is not yet required. It is the official
 renderer loop, supports WebXR, and lets `WebGPURenderer` complete asynchronous
 initialization before its first frame. See
@@ -297,15 +306,20 @@ does not overwrite the canvas CSS size. Follow the official
 let activePixelRatio = 0;
 let activeDisplayWidth = 0;
 let activeDisplayHeight = 0;
+const MAX_DRAWING_BUFFER_PIXELS = 1920 * 1080;
 
 function resizeRendererToDisplaySize(
   renderer: THREE.WebGLRenderer,
   camera: THREE.PerspectiveCamera,
 ) {
   const canvas = renderer.domElement;
-  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
   const displayWidth = Math.max(1, canvas.clientWidth);
   const displayHeight = Math.max(1, canvas.clientHeight);
+  const requestedPixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
+  const budgetPixelRatio = Math.sqrt(
+    MAX_DRAWING_BUFFER_PIXELS / (displayWidth * displayHeight),
+  );
+  const pixelRatio = Math.min(requestedPixelRatio, budgetPixelRatio);
   if (
     activePixelRatio === pixelRatio &&
     activeDisplayWidth === displayWidth &&
@@ -325,9 +339,10 @@ function resizeRendererToDisplaySize(
 }
 ```
 
-Cap DPR against a measured device budget; full device DPR can multiply fill,
-shadow, and post-processing cost. If a composer or render target exists, resize
-it through the same owner in the same transaction.
+Cap both DPR and total drawing-buffer pixels against a measured device budget;
+a DPR cap alone can still allocate a huge 4K buffer. The `1920 * 1080` value is
+a conservative starting point, not a universal target. If a composer or render
+target exists, resize it through the same owner in the same transaction.
 
 For an orthographic camera, preserve vertical world height:
 
@@ -359,7 +374,9 @@ manager.onError = (url) => showAssetError(url);
 const textureLoader = new THREE.TextureLoader(manager);
 
 async function loadLocalColorTexture() {
-  const texture = await textureLoader.loadAsync('/assets/textures/ground.webp');
+  const texture = await textureLoader.loadAsync(
+    publicAssetUrl('assets/textures/ground.webp'),
+  );
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
 }
@@ -432,13 +449,23 @@ function disposeObjectTree(root: THREE.Object3D) {
   const skeletons = new Set<THREE.Skeleton>();
 
   root.traverse((object) => {
-    const mesh = object as THREE.Mesh;
-    if (!mesh.isMesh) return;
+    const renderable = object as THREE.Object3D & {
+      geometry?: THREE.BufferGeometry;
+      material?: THREE.Material | THREE.Material[];
+      skeleton?: THREE.Skeleton;
+    };
 
-    if (mesh.geometry) geometries.add(mesh.geometry);
-    const skinned = mesh as THREE.SkinnedMesh;
-    if (skinned.isSkinnedMesh) skeletons.add(skinned.skeleton);
-    const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    if (renderable.geometry?.isBufferGeometry) {
+      geometries.add(renderable.geometry);
+    }
+    if (renderable.skeleton instanceof THREE.Skeleton) {
+      skeletons.add(renderable.skeleton);
+    }
+    const list = Array.isArray(renderable.material)
+      ? renderable.material
+      : renderable.material
+        ? [renderable.material]
+        : [];
 
     for (const material of list) {
       if (!material) continue;
@@ -476,14 +503,22 @@ Application teardown order:
 ```ts
 async function disposeGame() {
   phase = 'disposed';
-  renderer.setAnimationLoop(null);
+  await renderer.setAnimationLoop(null);
 
   controls?.dispose();
   mixer?.stopAllAction();
   if (animatedRoot) mixer?.uncacheRoot(animatedRoot);
 
+  // Scene traversal does not discover environment/background ownership.
+  if (scene.environment === ownedEnvironment) scene.environment = null;
+  if (scene.background === ownedBackground) scene.background = null;
+  ownedEnvironment?.dispose();
+  if (ownedBackground !== ownedEnvironment) ownedBackground?.dispose();
+
+  for (const light of ownedShadowLights) light.dispose();
   disposeObjectTree(scene);
-  renderTarget?.dispose();
+  standaloneRenderTarget?.dispose();
+  for (const pass of [...ownedPasses].reverse()) pass.dispose();
   composer?.dispose();
   timer.dispose();
   renderer.dispose();
@@ -492,8 +527,9 @@ async function disposeGame() {
 }
 ```
 
-Adapt optional names to the actual project. Remove DOM, pointer, keyboard,
-gamepad, visibility, and audio listeners through the same lifecycle owner.
+Adapt optional names to the actual project. Do not separately dispose a render
+target already owned by the composer. Remove DOM, pointer, keyboard, gamepad,
+visibility, and audio listeners through the same lifecycle owner.
 
 ## Fundamentals Verification
 

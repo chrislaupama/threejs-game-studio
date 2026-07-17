@@ -382,9 +382,10 @@ the entire world does not solve visibility, streaming, or collision cost.
 
 ## Performance And Memory
 
-- Watch `renderer.info.render.calls`, triangles, geometries, and frame time in
-  the worst active state. A lower draw-call count can still lose if CPU update
-  or triangle cost rises.
+- Watch WebGL `renderer.info.render.calls` or WebGPU/common
+  `renderer.info.render.drawCalls`, plus triangles, geometries, and frame time
+  in the worst active state. A lower draw-call count can still lose if CPU
+  update or triangle cost rises.
 - Share immutable geometry. Clone only at a deliberate mutation or ownership
   boundary.
 - Keep procedural builders and typed-array allocation out of the hot loop.

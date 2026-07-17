@@ -102,6 +102,154 @@ STALE_TYPESCRIPT_APIS = (
         "renamed BufferGeometryUtils.mergeBufferGeometries",
         re.compile(r"\bmergeBufferGeometries\s*\("),
     ),
+    (
+        "deprecated RGBELoader compatibility alias",
+        re.compile(r"\bRGBELoader\b"),
+    ),
+    (
+        "PCFSoftShadowMap is deprecated on WebGL and forward-incompatible",
+        re.compile(r"\bPCFSoftShadowMap\b"),
+    ),
+    (
+        "deprecated renderer or pipeline renderAsync",
+        re.compile(r"\.renderAsync\s*\("),
+    ),
+    (
+        "deprecated async renderer clear method",
+        re.compile(r"\.(?:clear|clearColor|clearDepth|clearStencil)Async\s*\("),
+    ),
+    (
+        "deprecated async renderer capability or texture method",
+        re.compile(r"\.(?:hasFeature|initTexture)Async\s*\("),
+    ),
+    (
+        "deprecated WebGPURenderer.waitForGPU",
+        re.compile(r"\.waitForGPU\s*\("),
+    ),
+    (
+        "deprecated KTX2Loader.detectSupportAsync",
+        re.compile(r"\.detectSupportAsync\s*\("),
+    ),
+    (
+        "deprecated DRACOLoader.setDecoderConfig",
+        re.compile(r"\.setDecoderConfig\s*\("),
+    ),
+    (
+        "removed PointerLockControls.getObject",
+        re.compile(r"\.getObject\s*\("),
+    ),
+    (
+        "deprecated WebGPU PostProcessing wrapper",
+        re.compile(r"\bnew\s+(?:THREE\.)?PostProcessing\s*\("),
+    ),
+    (
+        "removed TSL or lighting symbol",
+        re.compile(
+            r"\b(?:AnamorphicNode|TiledLighting|directionToColor|colorToDirection|"
+            r"directionToFaceDirection|addNodeElement)\b"
+        ),
+    ),
+    (
+        "deprecated PMREM async conversion method",
+        re.compile(
+            r"\.(?:fromScene|fromEquirectangular|fromCubemap)Async\s*\("
+        ),
+    ),
+    (
+        "deprecated SVGLoader.createShapes",
+        re.compile(r"\bSVGLoader\.createShapes\s*\("),
+    ),
+    (
+        "removed or legacy web loader",
+        re.compile(r"\b(?:USDZLoader|VTKLoader|LWOLoader|LottieLoader)\b"),
+    ),
+    (
+        "removed FirstPersonControls.handleResize",
+        re.compile(r"\.handleResize\s*\("),
+    ),
+    (
+        "removed SceneUtils attach or detach helper",
+        re.compile(r"\bSceneUtils\.(?:attach|detach)\s*\("),
+    ),
+    (
+        "removed legacy math predicate alias",
+        re.compile(
+            r"\.(?:empty|isIntersectionBox|isIntersectionPlane|"
+            r"isIntersectionSphere|isIntersectionLine)\s*\("
+        ),
+    ),
+    (
+        "deprecated VOX compatibility wrapper",
+        re.compile(r"\b(?:VOXMesh|VOXData3DTexture)\b"),
+    ),
+    (
+        "renamed renderer color-buffer getter",
+        re.compile(r"\.getColorBufferType\s*\("),
+    ),
+    (
+        "removed TSL helper alias",
+        re.compile(
+            r"\b(?:rangeFog|densityFog|storageObject|"
+            r"premultipliedGaussianBlur)\s*\("
+        ),
+    ),
+    (
+        "deprecated TSL constant alias",
+        re.compile(
+            r"\b(?:viewportResolution|PI2|transformedNormalView|"
+            r"transformedNormalWorld|transformedClearcoatNormalView)\b"
+        ),
+    ),
+    (
+        "renamed Line2NodeMaterial.lineColorNode",
+        re.compile(r"\.lineColorNode\b"),
+    ),
+    (
+        "renamed ColorManagement conversion method",
+        re.compile(r"\.(?:fromWorkingColorSpace|toWorkingColorSpace)\s*\("),
+    ),
+    (
+        "deprecated SkyMesh.isSky flag",
+        re.compile(r"\bskyMesh\.isSky\b"),
+    ),
+)
+
+EXECUTABLE_FENCE_LANGUAGES = {
+    "cjs",
+    "js",
+    "javascript",
+    "jsx",
+    "mjs",
+    "ts",
+    "tsx",
+    "typescript",
+}
+
+WEBGPU_UNSUPPORTED_PATTERNS = (
+    ("WebGPU example mixes in ShaderMaterial", re.compile(r"\bShaderMaterial\b")),
+    (
+        "WebGPU example mixes in RawShaderMaterial",
+        re.compile(r"\bRawShaderMaterial\b"),
+    ),
+    (
+        "WebGPU example mixes in onBeforeCompile",
+        re.compile(r"\.onBeforeCompile\b"),
+    ),
+    (
+        "WebGPU example mixes in EffectComposer",
+        re.compile(r"\bEffectComposer\b"),
+    ),
+)
+
+ROOT_ABSOLUTE_ASSET_URL = re.compile(
+    r"(?:'|\"|`)/(?:assets|audio|decoders|env|fonts|models|textures)/"
+)
+
+RAW_STALE_EXECUTABLE_CONTENT = (
+    (
+        "deprecated GLSL inverseTransformDirection helper",
+        re.compile(r"\binverseTransformDirection\b"),
+    ),
 )
 
 
@@ -164,6 +312,45 @@ def strip_fenced_markdown(text: str) -> str:
     return "".join(output)
 
 
+def executable_markdown_fences(text: str) -> list[tuple[str, int]]:
+    """Return executable fenced-code bodies and their absolute start offsets."""
+    fences: list[tuple[str, int]] = []
+    active_marker: str | None = None
+    active_length = 0
+    active_language = ""
+    body_start = 0
+    offset = 0
+
+    for line in text.splitlines(keepends=True):
+        if active_marker is None:
+            match = re.match(
+                r"^[ \t]{0,3}(`{3,}|~{3,})[ \t]*([A-Za-z0-9_-]+)?[^\r\n]*",
+                line,
+            )
+            if match:
+                marker = match.group(1)
+                active_marker = marker[0]
+                active_length = len(marker)
+                active_language = (match.group(2) or "").casefold()
+                body_start = offset + len(line)
+        else:
+            closing = re.match(
+                rf"^[ \t]{{0,3}}{re.escape(active_marker)}{{{active_length},}}[ \t]*(?:\r?\n)?$",
+                line,
+            )
+            if closing:
+                if active_language in EXECUTABLE_FENCE_LANGUAGES:
+                    fences.append((text[body_start:offset], body_start))
+                active_marker = None
+                active_length = 0
+                active_language = ""
+        offset += len(line)
+
+    if active_marker is not None and active_language in EXECUTABLE_FENCE_LANGUAGES:
+        fences.append((text[body_start:], body_start))
+    return fences
+
+
 def markdown_target(raw_target: str) -> str:
     value = raw_target.strip()
     if value.startswith("<"):
@@ -220,6 +407,128 @@ def audit_markdown_links(root: Path) -> list[Finding]:
                         target[:180],
                     )
                 )
+    return findings
+
+
+def audit_markdown_typescript_examples(root: Path) -> list[Finding]:
+    """Reject stale APIs and incompatible renderer stacks in executable sections."""
+    findings: list[Finding] = []
+    for path in sorted(root.rglob("*.md")):
+        if is_skipped(path, root) or is_legal_file(path):
+            continue
+        text, errors = safe_read(path, root)
+        findings.extend(errors)
+        if text is None:
+            continue
+
+        fences = executable_markdown_fences(text)
+        section_offsets = [match.start() for match in re.finditer(r"(?m)^##[ \t]+", text)]
+        sections: dict[int, list[tuple[str, str, int]]] = {}
+
+        for body, body_start in fences:
+            code = strip_typescript_comments_and_strings(body)
+            section = 0
+            for candidate in section_offsets:
+                if candidate > body_start:
+                    break
+                section = candidate
+            sections.setdefault(section, []).append((body, code, body_start))
+
+            for match in ROOT_ABSOLUTE_ASSET_URL.finditer(body):
+                absolute = body_start + match.start()
+                findings.append(
+                    Finding(
+                        path.relative_to(root),
+                        line_for(text, absolute),
+                        "root-absolute asset URL bypasses the Vite base",
+                        excerpt_for(text, absolute),
+                    )
+                )
+
+            for reason, pattern in RAW_STALE_EXECUTABLE_CONTENT:
+                for match in pattern.finditer(body):
+                    absolute = body_start + match.start()
+                    findings.append(
+                        Finding(
+                            path.relative_to(root),
+                            line_for(text, absolute),
+                            reason,
+                            excerpt_for(text, absolute),
+                        )
+                    )
+
+            for reason, pattern in STALE_TYPESCRIPT_APIS:
+                for match in pattern.finditer(code):
+                    absolute = body_start + match.start()
+                    findings.append(
+                        Finding(
+                            path.relative_to(root),
+                            line_for(text, absolute),
+                            reason,
+                            excerpt_for(text, absolute),
+                        )
+                    )
+
+        for section_fences in sections.values():
+            has_webgpu = any(
+                re.search(r"\bWebGPURenderer\b", code)
+                for _body, code, _start in section_fences
+            )
+            has_webgl = any(
+                re.search(r"\bWebGLRenderer\b", code)
+                for _body, code, _start in section_fences
+            )
+            draco_exporters = {"dracoExporter"}
+            for _body, code, _start in section_fences:
+                draco_exporters.update(
+                    match.group(1)
+                    for match in re.finditer(
+                        r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*"
+                        r"new\s+(?:THREE\.)?DRACOExporter\s*\(",
+                        code,
+                    )
+                )
+
+            for _body, code, body_start in section_fences:
+                for identifier in draco_exporters:
+                    pattern = re.compile(rf"\b{re.escape(identifier)}\.parse\s*\(")
+                    for match in pattern.finditer(code):
+                        absolute = body_start + match.start()
+                        findings.append(
+                            Finding(
+                                path.relative_to(root),
+                                line_for(text, absolute),
+                                "deprecated DRACOExporter.parse",
+                                excerpt_for(text, absolute),
+                            )
+                        )
+
+            if has_webgpu:
+                for reason, pattern in WEBGPU_UNSUPPORTED_PATTERNS:
+                    for _body, code, body_start in section_fences:
+                        for match in pattern.finditer(code):
+                            absolute = body_start + match.start()
+                            findings.append(
+                                Finding(
+                                    path.relative_to(root),
+                                    line_for(text, absolute),
+                                    reason,
+                                    excerpt_for(text, absolute),
+                                )
+                            )
+
+            if has_webgl:
+                for _body, code, body_start in section_fences:
+                    for match in re.finditer(r"\bRenderPipeline\b", code):
+                        absolute = body_start + match.start()
+                        findings.append(
+                            Finding(
+                                path.relative_to(root),
+                                line_for(text, absolute),
+                                "WebGLRenderer example mixes in RenderPipeline",
+                                excerpt_for(text, absolute),
+                            )
+                        )
     return findings
 
 
@@ -449,6 +758,30 @@ def audit_scaffold_typescript(root: Path) -> list[Finding]:
             uses_timer = True
         if re.search(r"\b(?:this\.)?renderer\.setAnimationLoop\s*\(", code):
             uses_animation_loop = True
+
+        pipeline_render = re.search(
+            r"\b(?:this\.)?pipeline\.render\s*\(", code
+        )
+        if (
+            pipeline_render
+            and re.search(r"\bnew\s+THREE\.RenderPipeline\s*\(", code)
+            and not (
+                re.search(
+                    r"\b(?:this\.)?renderer\.xr\.isPresenting\b", code
+                )
+                and re.search(
+                    r"\b(?:this\.)?renderer\.render\s*\(", code
+                )
+            )
+        ):
+            findings.append(
+                Finding(
+                    path.relative_to(root),
+                    line_for(text, pipeline_render.start()),
+                    "scaffold RenderPipeline must bypass post while XR is presenting",
+                    excerpt_for(text, pipeline_render.start()),
+                )
+            )
         for reason, pattern in STALE_TYPESCRIPT_APIS:
             for match in pattern.finditer(code):
                 findings.append(
@@ -485,6 +818,7 @@ def audit(root: Path) -> list[Finding]:
     root = root.resolve()
     findings, _skill_text, skill_name = audit_skill_files(root)
     findings.extend(audit_markdown_links(root))
+    findings.extend(audit_markdown_typescript_examples(root))
     findings.extend(audit_cross_skill_references(root, skill_name))
     findings.extend(audit_scaffold_package(root))
     findings.extend(audit_scaffold_typescript(root))
@@ -515,8 +849,9 @@ def main() -> int:
 
     print(
         "Skill structure audit passed: one coordinator owns every bundled reference; "
-        "relative Markdown links resolve; no operational cross-skill references remain; "
-        "and the scaffold uses the declared r185 baseline, Timer, and animation loop contracts."
+        "relative Markdown links resolve; executable examples avoid curated deprecated APIs "
+        "and incompatible renderer stacks; no operational cross-skill references remain; "
+        "and the scaffold uses the declared r185 baseline, Timer, and animation-loop contracts."
     )
     return 0
 

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { InterpolatedTransform } from '../utils/InterpolatedTransform';
 
 export class Pickup {
   readonly group = new THREE.Group();
@@ -17,6 +18,8 @@ export class Pickup {
   private readonly ringMaterial = new THREE.MeshBasicMaterial({
     color: '#f6f1df',
   });
+  private readonly rootPresentation: InterpolatedTransform;
+  private readonly corePresentation: InterpolatedTransform;
 
   constructor(
     readonly index: number,
@@ -31,13 +34,19 @@ export class Pickup {
     this.group.add(ring);
 
     this.group.position.copy(position);
+    this.rootPresentation = new InterpolatedTransform(this.group);
+    this.corePresentation = new InterpolatedTransform(core);
   }
 
   update(delta: number, elapsed: number): void {
     if (!this.active) return;
+    this.rootPresentation.beginStep();
+    this.corePresentation.beginStep();
     this.group.rotation.y += delta * 1.8;
     this.group.children[0].rotation.x -= delta * 1.2;
     this.group.position.y = 0.78 + Math.sin(elapsed * 2.6 + this.index) * 0.16;
+    this.rootPresentation.endStep();
+    this.corePresentation.endStep();
   }
 
   collect(): void {
@@ -45,9 +54,24 @@ export class Pickup {
     this.group.visible = false;
   }
 
-  reset(): void {
+  reset(rotationY = 0): void {
     this.active = true;
     this.group.visible = true;
+    this.group.position.y = 0.78 + Math.sin(this.index) * 0.16;
+    this.group.rotation.set(0, rotationY, 0);
+    this.group.children[0].rotation.set(0, 0, 0);
+    this.rootPresentation.snap();
+    this.corePresentation.snap();
+  }
+
+  present(alpha: number): void {
+    this.rootPresentation.present(alpha);
+    this.corePresentation.present(alpha);
+  }
+
+  holdPresentation(): void {
+    this.rootPresentation.hold();
+    this.corePresentation.hold();
   }
 
   dispose(): void {

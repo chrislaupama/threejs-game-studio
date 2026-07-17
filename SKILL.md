@@ -136,7 +136,12 @@ check.
 Choose these unless project evidence or the request demands otherwise:
 
 - Vite + TypeScript + npm + `three` package imports.
-- `WebGLRenderer` for the widest mature production path.
+- `WebGLRenderer` for the widest mature production path and straightforward
+  tutorials.
+- For a graphics-heavy or compute-heavy 3D site/game, explicitly offer
+  `WebGPURenderer` as the recommended modern option when the target browsers,
+  material/post stack, and measured workload fit it. Explain its experimental
+  status and WebGL 2 fallback before the user commits to the renderer family.
 - `PerspectiveCamera`, r185 `Timer`, and `renderer.setAnimationLoop()`.
 - glTF 2.0 (`.glb`) through `GLTFLoader` for authored 3D assets.
 - `MeshStandardMaterial` plus an intentional environment and light rig.
@@ -148,9 +153,11 @@ Choose these unless project evidence or the request demands otherwise:
 - Capped device-pixel ratio, measured budgets, explicit disposal, deterministic
   test hooks, and a production-preview browser pass.
 
-Explain deviations. Use WebGPU, TSL, compressed-asset transcoders, custom
-shaders, XR, or advanced post-processing as deliberate upgrades, not automatic
-complexity.
+Explain deviations. Treat WebGPU as a first-class candidate for demanding 3D,
+not a guaranteed speed switch: validate the actual WebGPU backend, the
+WebGPURenderer's WebGL 2 fallback, and a preserved `WebGLRenderer` path only
+when each is claimed. Use compressed-asset transcoders, custom shaders, XR, or
+advanced post-processing as deliberate upgrades.
 
 ## Reference Router
 
@@ -177,6 +184,7 @@ have a contents section and copyable examples.
 | Procedural hero/enemy/reward/world construction | `references/procedural-modeling.md` |
 | Art direction, material roles, world layers, VFX ownership | `references/visual-architecture.md` |
 | Renderer setup, composition, color, fog, post, renderer diagnostics | `references/rendering.md` |
+| Heavy-3D WebGPU decision, boot, fallback, TSL, compute, clustered lights, profiling | `references/webgpu.md` |
 | WebGL GLSL/onBeforeCompile and WebGPU TSL/RenderPipeline recipes | `references/shaders.md` |
 | Draw-call/triangle/texture budgets, LOD, pooling, culling, disposal | `references/technical-art.md` |
 | Cameras, raycasting, selection, pointer lock, gamepad, manipulation | `references/interaction.md` |
@@ -205,7 +213,9 @@ definition of complete.
 
 ### 2. Choose technical contracts
 
-Declare WebGL or WebGPU; units and axes; camera style; simulation model;
+Classify the render workload and offer WebGL or WebGPU when heavy 3D makes the
+choice material. Then declare the renderer family and actual fallback contract;
+units and axes; camera style; simulation model;
 fixed/variable timing; input intents; state machine; asset layout; color-space
 policy; quality tiers; performance budgets; loading/error behavior; save scope;
 and disposal ownership. Resolve these before features create competing owners.
@@ -283,7 +293,7 @@ Generate current APIs:
 - Import official addons from `three/addons/...`.
 - Use `renderer.outputColorSpace`, `texture.colorSpace`,
   `THREE.SRGBColorSpace`, and `THREE.LinearSRGBColorSpace`.
-- Use `HDRLoader`, not the removed `RGBELoader` name.
+- Use `HDRLoader`, not the deprecated `RGBELoader` alias.
 - Use `THREE.PCFShadowMap`, not deprecated `PCFSoftShadowMap`.
 - Use `BufferGeometryUtils.mergeGeometries()`, not
   `mergeBufferGeometries()`.
@@ -293,15 +303,24 @@ Generate current APIs:
 - Use WebGPU node materials/TSL and `THREE.RenderPipeline`; never combine
   WebGPU with `ShaderMaterial`, `RawShaderMaterial`, `onBeforeCompile()`, or
   `EffectComposer`.
+- In r185, bypass `RenderPipeline` while `renderer.xr.isPresenting` and render
+  the scene directly. The pipeline temporarily disables XR; treat its node
+  post-processing as a desktop/non-XR path unless an exact-version,
+  on-device-tested XR pipeline proves otherwise.
 - Initialize WebGPU before renderer-dependent loader detection or eager renders.
+- After WebGPU initialization, prefer current synchronous `render()`,
+  `clear()`, `hasFeature()`, and `initTexture()` APIs. `computeAsync()` remains
+  current in r185.1; do not incorrectly classify every async Renderer method as
+  deprecated.
 - Keep `FileLoader.load()` callback-driven; do not rely on a return value.
 
 ## Greenfield Scaffold
 
 Create the packaged Vite + TypeScript + Three.js r185 game. It includes a
 playable collection loop, desktop/touch input, procedural audio, explicit
-state, diagnostics, local-only request checks, Playwright smoke coverage, and
-clean teardown.
+state, diagnostics, local-only request checks, Playwright smoke coverage, clean
+teardown, and a typechecked optional WebGPU renderer adapter for projects that
+select that path.
 
 ```bash
 python3 <this-skill-dir>/scripts/create_threejs_game.py ./my-game

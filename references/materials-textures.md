@@ -27,6 +27,9 @@ or consuming too much GPU memory. Also use it when designing a reusable
 material kit, importing local image maps, building atlases, or deciding whether
 an advanced `MeshPhysicalMaterial` feature is worth its cost.
 
+Texture-loading examples use the project-owned `publicAssetUrl()` helper from
+`local-assets.md`; import it from the local asset boundary in real code.
+
 Choose from the smallest material that produces the intended image:
 
 | Requirement | Start with |
@@ -76,10 +79,10 @@ import * as THREE from 'three';
 export async function createPaintedMetal() {
   const loader = new THREE.TextureLoader();
   const [baseColor, normal, roughness, metalness] = await Promise.all([
-    loader.loadAsync('/assets/materials/panel/base-color.webp'),
-    loader.loadAsync('/assets/materials/panel/normal.webp'),
-    loader.loadAsync('/assets/materials/panel/roughness.webp'),
-    loader.loadAsync('/assets/materials/panel/metalness.webp'),
+    loader.loadAsync(publicAssetUrl('assets/materials/panel/base-color.webp')),
+    loader.loadAsync(publicAssetUrl('assets/materials/panel/normal.webp')),
+    loader.loadAsync(publicAssetUrl('assets/materials/panel/roughness.webp')),
+    loader.loadAsync(publicAssetUrl('assets/materials/panel/metalness.webp')),
   ]);
 
   baseColor.colorSpace = THREE.SRGBColorSpace;
@@ -274,7 +277,9 @@ manager.onProgress = (_url, loaded, total) => {
   loadingUi.setProgress(total === 0 ? 0 : loaded / total);
 };
 const textureLoader = new THREE.TextureLoader(manager);
-const texture = await textureLoader.loadAsync('/assets/world/tiles.webp');
+const texture = await textureLoader.loadAsync(
+  publicAssetUrl('assets/world/tiles.webp'),
+);
 texture.colorSpace = THREE.SRGBColorSpace;
 ```
 
@@ -333,7 +338,9 @@ green, and blue channels of one image. Three.js already samples those material
 maps from the expected channels:
 
 ```ts
-const orm = await loader.loadAsync('/assets/materials/rock/orm.webp');
+const orm = await loader.loadAsync(
+  publicAssetUrl('assets/materials/rock/orm.webp'),
+);
 orm.colorSpace = THREE.NoColorSpace;
 
 const material = new THREE.MeshStandardMaterial({

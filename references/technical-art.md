@@ -17,6 +17,7 @@ readable authored detail that survives active interaction, mobile viewports,
 and the chosen WebGL or WebGPU budget.
 
 Primary Three.js references: [WebGLRenderer.info](https://threejs.org/docs/pages/WebGLRenderer.html),
+[common Renderer Info](https://threejs.org/docs/pages/Info.html),
 [InstancedMesh](https://threejs.org/docs/pages/InstancedMesh.html),
 [BatchedMesh](https://threejs.org/docs/pages/BatchedMesh.html),
 [LOD](https://threejs.org/docs/pages/LOD.html), and
@@ -34,7 +35,8 @@ only the affected budget, baseline, and tradeoff.
 - Material kit: named roles, not one-off colors.
 - VFX language: event-driven effects and state readability.
 - Lighting stack: key/fill/rim/practical/contact/depth.
-- Render budget target: draw calls, triangles, textures, materials, DPR, shadow/post cost.
+- Render budget target: draw calls, triangles, textures, materials, DPR plus
+  maximum drawing-buffer pixels, shadow/post cost.
 - Asset strategy: procedural / project-local / user-supplied / hybrid local.
 - Mobile constraint: what changes first if performance or readability fails.
 
@@ -48,14 +50,15 @@ and reports over-budget rows. In a non-scaffold project, capture equivalent
 
 | Metric (worst active-play view) | Desktop tier | Mobile tier |
 | --- | --- | --- |
-| Draw calls (`info.render.calls`) | <= 300 | <= 150 |
+| Draw calls (WebGL `info.render.calls`; WebGPU/common `info.render.drawCalls`) | <= 300 | <= 150 |
 | Triangles (`info.render.triangles`) | <= 750k | <= 300k |
 | Geometries (`info.memory.geometries`) | <= 300 | <= 200 |
 | Textures (`info.memory.textures`) | <= 60 | <= 40 |
 | Texture memory (est.) | <= 256 MB | <= 128 MB |
 | Shadow-casting lights | <= 2 | 1 |
 | Shadow map size | <= 2048 | <= 1024 |
-| DPR cap | 2 | 1.5-2 |
+| DPR cap | 1.5-2 | 1-1.5 |
+| Maximum drawing-buffer pixels | about 2.1M (1920x1080) | about 0.9-1.3M, measured |
 | Post passes (beyond render+output) | <= 2 | 0-1 |
 
 How to spend within them:
@@ -69,7 +72,10 @@ How to spend within them:
 - Post: every pass must earn its cost and preserve interaction clarity; concrete
   chain settings are in `shaders.md`.
 
-Always report actual renderer diagnostics after the graphics pass: calls, triangles, geometries, textures, material count if available, post passes, shadow settings, DPR cap, and bottlenecks.
+Always report actual renderer diagnostics after the graphics pass: renderer
+class/actual backend, draw calls using the correct info shape, triangles,
+geometries, textures, material count if available, post passes, shadow
+settings, actual drawing-buffer size/pixels, DPR, and bottlenecks.
 
 For a multi-pass WebGL frame, prevent `renderer.info` from resetting at every
 pass and take the snapshot after the full frame:

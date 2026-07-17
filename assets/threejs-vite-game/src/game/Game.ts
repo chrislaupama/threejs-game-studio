@@ -36,10 +36,12 @@ export class Game {
     acceleration: 13,
     cameraLag: 0.16,
     exposure: 1.05,
-    maxDpr: 2,
+    maxDpr: 1.5,
   };
   private readonly debugTools: DebugTools;
+  private readonly sun = new THREE.DirectionalLight('#fff1bf', 2.6);
   private readonly arena: THREE.Group;
+  private readonly rendererStatus = document.createElement('section');
 
   private frame = 0;
   private score = 0;
@@ -48,14 +50,47 @@ export class Game {
   private rng = createSeededRandom(1);
   private pausedForScreenshot = false;
   private reducedMotion = false;
+  private contextLost = false;
+  private resumeAfterContextRestore = false;
+
+  private readonly onContextLost = (event: Event) => {
+    event.preventDefault();
+    if (this.contextLost) return;
+    this.contextLost = true;
+    this.resumeAfterContextRestore = this.loop.isRunning;
+    this.loop.stop();
+    this.input.suspend();
+    void this.audio.suspend();
+    this.holdPresentation();
+    this.rendererStatus.hidden = false;
+    this.rendererStatus.textContent =
+      'The graphics context was lost. Rendering is paused while recovery is attempted.';
+  };
+
+  private readonly onContextRestored = () => {
+    if (!this.contextLost) return;
+    this.contextLost = false;
+    this.rendererStatus.hidden = true;
+    this.rendererStatus.textContent = '';
+    this.holdPresentation();
+    if (this.resumeAfterContextRestore) this.loop.start();
+    this.resumeAfterContextRestore = false;
+    void this.audio.resume().catch(() => {
+      // A browser may require another player gesture before audio can resume.
+    });
+  };
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = createRenderer(canvas);
     this.loop = new Loop(
       this.renderer,
       (delta) => this.update(delta),
-      () => this.render(),
+      (alpha) => this.render(alpha),
     );
+    this.rendererStatus.className = 'renderer-status';
+    this.rendererStatus.hidden = true;
+    this.rendererStatus.setAttribute('role', 'alert');
+    this.rendererStatus.setAttribute('aria-live', 'assertive');
     this.renderer.toneMappingExposure = this.tuning.exposure;
 
     this.input = new InputController(
@@ -75,14 +110,19 @@ export class Game {
     this.resetRun();
     resizeRenderer(this.renderer, this.camera, this.tuning.maxDpr);
     this.installTestHooks();
-    this.publishDiagnostics();
+    document.querySelector('#app')?.append(this.rendererStatus);
+    canvas.addEventListener('webglcontextlost', this.onContextLost);
+    canvas.addEventListener('webglcontextrestored', this.onContextRestored);
   }
 
   start(): void {
-    this.loop.start();
+    if (!this.contextLost) this.loop.start();
   }
 
   dispose(): void {
+    this.canvas.removeEventListener('webglcontextlost', this.onContextLost);
+    this.canvas.removeEventListener('webglcontextrestored', this.onContextRestored);
+    this.rendererStatus.remove();
     this.loop.dispose();
     this.input.dispose();
     this.audio.dispose();
@@ -91,29 +131,32 @@ export class Game {
     for (const pickup of this.pickups) pickup.dispose();
     this.player.dispose();
     disposeObject3D(this.arena);
+    this.sun.dispose();
     this.renderer.dispose();
     window.__THREE_GAME_DIAGNOSTICS__ = undefined;
     window.__THREE_GAME_TEST_HOOKS__ = undefined;
   }
 
-  private update(delta: number): void {
+  private update(delta: number): boolean {
     this.frame += 1;
-    resizeRenderer(this.renderer, this.camera, this.tuning.maxDpr);
 
     if (this.pausedForScreenshot) {
-      this.publishDiagnostics();
-      return;
+      this.holdPresentation();
+      return false;
     }
 
-    if (this.input.consumeRestartPressed()) this.resetRun();
+    if (this.input.consumeRestartPressed()) {
+      this.resetRun();
+      return true;
+    }
     if (this.input.consumePausePressed() && (this.state === 'playing' || this.state === 'paused')) {
       this.state = this.state === 'paused' ? 'playing' : 'paused';
     }
 
     if (this.state !== 'playing') {
       this.hud.update(this.score, this.pickups.length, this.elapsed, TIME_LIMIT_SECONDS, this.state);
-      this.publishDiagnostics();
-      return;
+      this.holdPresentation();
+      return false;
     }
 
     this.elapsed += delta;
@@ -142,11 +185,17 @@ export class Game {
 
     this.cameraRig.update(delta, this.player.group.position, this.tuning.cameraLag);
     this.hud.update(this.score, this.pickups.length, this.elapsed, TIME_LIMIT_SECONDS, this.state);
-    this.publishDiagnostics();
+    return false;
   }
 
-  private render(): void {
+  private render(alpha: number): void {
+    this.player.present(alpha);
+    for (const pickup of this.pickups) pickup.present(alpha);
+    for (const hazard of this.hazards) hazard.present(alpha);
+    this.cameraRig.present(alpha);
+    resizeRenderer(this.renderer, this.camera, this.tuning.maxDpr);
     this.renderer.render(this.scene, this.camera);
+    this.publishDiagnostics();
   }
 
   private createScene(): THREE.Group {
@@ -156,10 +205,10 @@ export class Game {
     const hemisphere = new THREE.HemisphereLight('#f6f1df', '#2b322d', 1.7);
     this.scene.add(hemisphere);
 
-    const sun = new THREE.DirectionalLight('#fff1bf', 2.6);
+    const sun = this.sun;
     sun.position.set(-5, 9, 6);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.mapSize.set(1024, 1024);
     sun.shadow.camera.near = 0.5;
     sun.shadow.camera.far = 30;
     sun.shadow.camera.left = -14;
@@ -309,15 +358,20 @@ export class Game {
     this.score = 0;
     this.elapsed = 0;
     this.state = 'playing';
-    this.player.group.position.set(0, 0.06, 0);
-    this.player.velocity.set(0, 0, 0);
+    this.player.reset();
     for (const pickup of this.pickups) {
-      pickup.reset();
-      pickup.group.rotation.y = this.rng() * Math.PI * 2;
+      pickup.reset(this.rng() * Math.PI * 2);
     }
     for (const hazard of this.hazards) hazard.reset();
     this.cameraRig.snapTo(this.player.group.position);
     this.syncHud();
+  }
+
+  private holdPresentation(): void {
+    this.player.holdPresentation();
+    for (const pickup of this.pickups) pickup.holdPresentation();
+    for (const hazard of this.hazards) hazard.holdPresentation();
+    this.cameraRig.holdPresentation();
   }
 
   private completeRun(): void {
@@ -374,7 +428,7 @@ export class Game {
         clientHeight: this.canvas.clientHeight,
         width: this.canvas.width,
         height: this.canvas.height,
-        dpr: Math.min(window.devicePixelRatio || 1, this.tuning.maxDpr),
+        dpr: this.renderer.getPixelRatio(),
       },
     };
   }

@@ -13,7 +13,7 @@ const CONTROLS: Array<{ key: NumericKey; min: number; max: number; step: number 
   { key: 'dashMultiplier', min: 1, max: 3, step: 0.05 },
   { key: 'acceleration', min: 4, max: 22, step: 0.1 },
   { key: 'cameraLag', min: 0.02, max: 0.8, step: 0.01 },
-  { key: 'maxDpr', min: 1, max: 2, step: 0.25 },
+  { key: 'maxDpr', min: 0.75, max: 2, step: 0.25 },
   { key: 'exposure', min: 0.6, max: 1.8, step: 0.01 },
 ];
 

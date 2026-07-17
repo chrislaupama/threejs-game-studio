@@ -169,6 +169,142 @@ class AuditSkillStructureTest(unittest.TestCase):
         result = self.run_audit(files)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_rejects_stale_api_in_executable_markdown_fence(self) -> None:
+        files = self.base_files()
+        files["references/core.md"] += (
+            "\n```ts\n"
+            "const loader = new RGBELoader();\n"
+            "await renderer.renderAsync(scene, camera);\n"
+            "```\n"
+        )
+        result = self.run_audit(files)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("deprecated RGBELoader compatibility alias", result.stdout)
+        self.assertIn("deprecated renderer or pipeline renderAsync", result.stdout)
+
+    def test_ignores_prose_non_executable_fences_comments_and_strings(self) -> None:
+        files = self.base_files()
+        files["references/core.md"] += (
+            "\n`RGBELoader` is historical prose.\n"
+            "```text\nnew RGBELoader(); renderer.renderAsync();\n```\n"
+            "```ts\n"
+            "// new RGBELoader();\n"
+            "const note = 'renderer.renderAsync()';\n"
+            "void note;\n"
+            "```\n"
+        )
+        result = self.run_audit(files)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_rejects_webgpu_example_with_webgl_only_customization(self) -> None:
+        files = self.base_files()
+        files["references/core.md"] += (
+            "\n```ts\n"
+            "const renderer = new THREE.WebGPURenderer();\n"
+            "const composer = new EffectComposer(renderer);\n"
+            "```\n"
+        )
+        result = self.run_audit(files)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("WebGPU example mixes in EffectComposer", result.stdout)
+
+    def test_accepts_current_compute_and_webgl_tsl_migration_bridge(self) -> None:
+        files = self.base_files()
+        files["references/core.md"] += (
+            "\n```ts\n"
+            "const webgpu = new THREE.WebGPURenderer();\n"
+            "await webgpu.computeAsync(computeNode);\n"
+            "```\n"
+            "```ts\n"
+            "const webgl = new THREE.WebGLRenderer();\n"
+            "webgl.setNodesHandler(new WebGLNodesHandler());\n"
+            "webgl.setEffects([bloomPass]);\n"
+            "```\n"
+        )
+        result = self.run_audit(files)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_requires_xr_bypass_in_scaffold_render_pipeline(self) -> None:
+        files = self.base_files()
+        files["assets/threejs-vite-game/src/webgpu.ts"] = (
+            "import * as THREE from 'three/webgpu';\n"
+            "declare const renderer: THREE.WebGPURenderer;\n"
+            "declare const scene: THREE.Scene;\n"
+            "declare const camera: THREE.Camera;\n"
+            "const pipeline = new THREE.RenderPipeline(renderer);\n"
+            "pipeline.render();\n"
+        )
+        result = self.run_audit(files)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "scaffold RenderPipeline must bypass post while XR is presenting",
+            result.stdout,
+        )
+
+        files["assets/threejs-vite-game/src/webgpu.ts"] = (
+            "import * as THREE from 'three/webgpu';\n"
+            "declare const renderer: THREE.WebGPURenderer;\n"
+            "declare const scene: THREE.Scene;\n"
+            "declare const camera: THREE.Camera;\n"
+            "const pipeline = new THREE.RenderPipeline(renderer);\n"
+            "if (renderer.xr.isPresenting) renderer.render(scene, camera);\n"
+            "else pipeline.render();\n"
+        )
+        result = self.run_audit(files)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_rejects_renderer_mixing_across_fences_in_one_section(self) -> None:
+        files = self.base_files()
+        files["references/core.md"] += (
+            "\n## One renderer recipe\n"
+            "```ts\nconst renderer = new THREE.WebGPURenderer();\n```\n"
+            "Continue the same recipe:\n"
+            "```ts\nconst composer = new EffectComposer(renderer);\n```\n"
+        )
+        result = self.run_audit(files)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("WebGPU example mixes in EffectComposer", result.stdout)
+
+    def test_rejects_root_absolute_asset_url_in_executable_fence(self) -> None:
+        files = self.base_files()
+        files["references/core.md"] += (
+            "\n```ts\nawait loader.loadAsync('/assets/hero.glb');\n```\n"
+        )
+        result = self.run_audit(files)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("root-absolute asset URL bypasses the Vite base", result.stdout)
+
+    def test_accepts_current_gltf_exporter_parse(self) -> None:
+        files = self.base_files()
+        files["references/core.md"] += (
+            "\n```ts\n"
+            "const exporter = new GLTFExporter();\n"
+            "exporter.parse(scene, onDone, onError);\n"
+            "```\n"
+        )
+        result = self.run_audit(files)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_rejects_deprecated_tsl_constant_without_call(self) -> None:
+        files = self.base_files()
+        files["references/core.md"] += (
+            "\n```ts\nconst size = viewportResolution;\nvoid size;\n```\n"
+        )
+        result = self.run_audit(files)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("deprecated TSL constant alias", result.stdout)
+
+    def test_rejects_draco_exporter_parse_with_arbitrary_identifier(self) -> None:
+        files = self.base_files()
+        files["references/core.md"] += (
+            "\n## Export recipe\n"
+            "```ts\nconst writer = new DRACOExporter();\n```\n"
+            "```ts\nwriter.parse(mesh);\n```\n"
+        )
+        result = self.run_audit(files)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("deprecated DRACOExporter.parse", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

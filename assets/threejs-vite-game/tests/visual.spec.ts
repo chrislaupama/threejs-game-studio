@@ -169,6 +169,14 @@ test('resize keeps the drawing buffer and camera projection in sync', async ({ p
   await page.goto('/');
   await page.waitForFunction(() => (window.__THREE_GAME_DIAGNOSTICS__?.frame ?? 0) > 5);
 
+  await page.setViewportSize({ width: 2200, height: 1200 });
+  await expect
+    .poll(() => page.evaluate(() => {
+      const canvas = window.__THREE_GAME_DIAGNOSTICS__?.canvas;
+      return canvas ? canvas.width * canvas.height : Number.POSITIVE_INFINITY;
+    }))
+    .toBeLessThanOrEqual(1920 * 1080 + 1920);
+
   await page.setViewportSize({ width: 640, height: 800 });
   await expect
     .poll(() => page.evaluate(() => {
@@ -186,4 +194,44 @@ test('resize keeps the drawing buffer and camera projection in sync', async ({ p
     }))
     .toBe(true);
   expect(outboundRequests).toEqual([]);
+});
+
+test('WebGL context loss pauses and restores the owned loop', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop-chrome', 'One desktop recovery pass is sufficient.');
+  await page.goto('/');
+  await page.waitForFunction(() => (window.__THREE_GAME_DIAGNOSTICS__?.frame ?? 0) > 5);
+
+  const extensionAvailable = await page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>('#game-canvas');
+    const gl = canvas?.getContext('webgl2');
+    const extension = gl?.getExtension('WEBGL_lose_context');
+    if (!extension) return false;
+    (window as typeof window & {
+      __WEBGL_LOSE_CONTEXT__?: WEBGL_lose_context;
+    }).__WEBGL_LOSE_CONTEXT__ = extension;
+    extension.loseContext();
+    return true;
+  });
+  test.skip(!extensionAvailable, 'WEBGL_lose_context is unavailable in this browser.');
+
+  await expect(page.locator('.renderer-status')).toBeVisible();
+  const stoppedFrame = await page.evaluate(
+    () => window.__THREE_GAME_DIAGNOSTICS__?.frame ?? 0,
+  );
+  await page.waitForTimeout(250);
+  const frameWhileLost = await page.evaluate(
+    () => window.__THREE_GAME_DIAGNOSTICS__?.frame ?? 0,
+  );
+  expect(frameWhileLost - stoppedFrame).toBeLessThanOrEqual(1);
+
+  await page.evaluate(() => {
+    (window as typeof window & {
+      __WEBGL_LOSE_CONTEXT__?: WEBGL_lose_context;
+    }).__WEBGL_LOSE_CONTEXT__?.restoreContext();
+  });
+
+  await expect(page.locator('.renderer-status')).toBeHidden();
+  await expect
+    .poll(() => page.evaluate(() => window.__THREE_GAME_DIAGNOSTICS__?.frame ?? 0))
+    .toBeGreaterThan(frameWhileLost + 5);
 });

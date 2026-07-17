@@ -14,8 +14,9 @@ quality claims.
 - Three.js r185 / `three@0.185.1`, verified 2026-07-17.
 - Vite 8 and TypeScript 6 starter project.
 - `THREE.Timer` and `renderer.setAnimationLoop()`.
-- `WebGLRenderer` as the novice-safe default.
-- A documented `WebGPURenderer` + TSL + `RenderPipeline` route.
+- `WebGLRenderer` as the mature compatibility/teaching default.
+- A first-class, typechecked `WebGPURenderer` + TSL + `RenderPipeline` route,
+  recommended for evaluation on graphics-heavy and compute-heavy 3D work.
 - Official addon imports from `three/addons/...`.
 - Local-first runtime assets and browser verification.
 
@@ -31,6 +32,9 @@ and the official migration guide before changing an existing project.
   timers, resizing, loading, errors, and disposal.
 - Current renderer-specific guidance for WebGL/GLSL/EffectComposer and
   WebGPU/TSL/RenderPipeline without mixing incompatible recipes.
+- A dedicated WebGPU playbook covering the heavy-3D decision, actual-backend
+  reporting, WebGL 2 fallback semantics, node materials, compute, clustered
+  lights, compressed textures, pipeline ownership, profiling, and release QA.
 - Game design, genre completion contracts, state, input actions, camera rigs,
   collision, fixed simulation, AI/director patterns, game feel, UI,
   accessibility, Web Audio, and WebXR.
@@ -42,7 +46,7 @@ and the official migration guide before changing an existing project.
   local-runtime audits.
 - A runnable Vite + TypeScript mini-game scaffold with desktop/touch controls,
   procedural audio, pause/retry/win/fail states, diagnostics, Playwright tests,
-  and explicit teardown.
+  explicit teardown, and a compile-checked optional WebGPU renderer adapter.
 
 Operational guidance lives in `SKILL.md` and `references/`. Reusable project
 templates and the starter game live in `assets/`; validation and scaffold tools

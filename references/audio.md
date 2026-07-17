@@ -12,6 +12,9 @@ Use this reference when implementing SFX, UI sounds, ambience, music playback,
 spatial sound, mute/volume, or audio-related game feel. Use only browser Web
 Audio and project-local files.
 
+Asset-loading examples use the project-owned `publicAssetUrl()` helper from
+`local-assets.md`; import it from the local asset boundary in real code.
+
 ## Ownership
 
 Create one audio system that owns:
@@ -130,7 +133,9 @@ const listener = new THREE.AudioListener();
 camera.add(listener);
 
 const loader = new THREE.AudioLoader(loadingManager);
-const engineBuffer = await loader.loadAsync('/audio/engine-loop.ogg');
+const engineBuffer = await loader.loadAsync(
+  publicAssetUrl('audio/engine-loop.ogg'),
+);
 
 const engine = new THREE.PositionalAudio(listener);
 engine.setBuffer(engineBuffer);

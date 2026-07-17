@@ -71,6 +71,16 @@ export class AudioSystem {
     this.syncMuteUi();
   }
 
+  async suspend(): Promise<void> {
+    if (this.context?.state === 'running') await this.context.suspend();
+  }
+
+  async resume(): Promise<void> {
+    if (this.unlocked && this.context?.state === 'suspended') {
+      await this.context.resume();
+    }
+  }
+
   dispose(): void {
     window.removeEventListener('pointerdown', this.onUnlock);
     window.removeEventListener('keydown', this.onUnlock);

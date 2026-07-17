@@ -11,8 +11,8 @@ export class Loop {
 
   constructor(
     private readonly renderer: THREE.WebGLRenderer,
-    private readonly update: (fixedDeltaSeconds: number) => void,
-    private readonly render: () => void,
+    private readonly update: (fixedDeltaSeconds: number) => boolean | void,
+    private readonly render: (interpolationAlpha: number) => void,
   ) {
     this.timer.connect(document);
   }
@@ -23,6 +23,10 @@ export class Loop {
     this.accumulator = 0;
     this.timer.reset();
     this.renderer.setAnimationLoop(this.tick);
+  }
+
+  get isRunning(): boolean {
+    return this.running;
   }
 
   stop(): void {
@@ -48,9 +52,13 @@ export class Loop {
       this.accumulator >= FIXED_STEP_SECONDS &&
       steps < MAX_STEPS_PER_FRAME
     ) {
-      this.update(FIXED_STEP_SECONDS);
+      const discontinuity = this.update(FIXED_STEP_SECONDS) === true;
       this.accumulator -= FIXED_STEP_SECONDS;
       steps += 1;
+      if (discontinuity) {
+        this.accumulator = 0;
+        break;
+      }
     }
 
     if (
@@ -59,6 +67,8 @@ export class Loop {
     ) {
       this.accumulator = 0;
     }
-    this.render();
+    this.render(
+      THREE.MathUtils.clamp(this.accumulator / FIXED_STEP_SECONDS, 0, 1),
+    );
   };
 }
